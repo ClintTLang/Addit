@@ -3,6 +3,7 @@ import SwiftData
 
 struct AlbumDetailView: View {
     let album: Album
+    let embeddedInPanel: Bool
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(GoogleDriveService.self) private var driveService
     @Environment(\.modelContext) private var modelContext
@@ -17,6 +18,11 @@ struct AlbumDetailView: View {
     @State private var artistFileId: String?
     @State private var isEditingArtist = false
     @State private var editedArtistName = ""
+
+    init(album: Album, embeddedInPanel: Bool = false) {
+        self.album = album
+        self.embeddedInPanel = embeddedInPanel
+    }
 
     private var sortedTracks: [Track] {
         album.tracks.sorted { $0.trackNumber < $1.trackNumber }
@@ -120,6 +126,10 @@ struct AlbumDetailView: View {
         }
         .environment(\.editMode, $editMode)
         .navigationTitle(album.name)
+        .navigationBarTitleDisplayMode(embeddedInPanel ? .inline : .automatic)
+        .scrollContentBackground(embeddedInPanel ? .hidden : .visible)
+        .background(embeddedInPanel ? Color.clear : Color(.systemBackground))
+        .toolbarBackground(embeddedInPanel ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             if album.canEdit && !isReordering && !isSyncing {
                 ToolbarItem(placement: .primaryAction) {

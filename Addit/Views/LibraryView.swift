@@ -115,26 +115,45 @@ struct FloatingAlbumPanel: View {
     let onClose: () -> Void
 
     var body: some View {
-        NavigationStack {
-            AlbumDetailView(album: album)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            onClose()
-                        } label: {
-                            Image(systemName: "xmark")
+        GeometryReader { proxy in
+            NavigationStack {
+                AlbumDetailView(album: album, embeddedInPanel: true)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button {
+                                onClose()
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .accessibilityLabel("Close")
                         }
-                        .accessibilityLabel("Close")
                     }
-                }
+            }
+            .frame(
+                width: min(700, proxy.size.width - 24),
+                height: min(760, proxy.size.height * 0.86)
+            )
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+            }
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.16), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(height: 120)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: .black.opacity(0.25), radius: 30, y: 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .frame(maxWidth: 700, maxHeight: .infinity)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.25), radius: 30, y: 14)
     }
 }
 
