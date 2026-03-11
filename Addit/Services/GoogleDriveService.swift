@@ -32,6 +32,20 @@ final class GoogleDriveService {
         return response.files.sorted(by: compareCoverPriority).first
     }
 
+    func upsertCoverJPG(inFolder folderId: String, data: Data, fileName: String = "cover.jpg") async throws -> DriveItem {
+        if let existing = try await findFile(named: fileName, inFolder: folderId) {
+            try await updateFileData(fileId: existing.id, data: data, mimeType: "image/jpeg")
+            return existing
+        }
+
+        return try await createFile(
+            name: fileName,
+            mimeType: "image/jpeg",
+            inFolder: folderId,
+            data: data
+        )
+    }
+
     func findFile(named fileName: String, inFolder folderId: String) async throws -> DriveItem? {
         let escaped = fileName.replacingOccurrences(of: "'", with: "\\'")
         let query = "'\(folderId)' in parents and name = '\(escaped)' and trashed=false"

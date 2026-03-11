@@ -1,17 +1,24 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import PhotosUI
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(GoogleAuthService.self) private var authService
     @Environment(GoogleDriveService.self) private var driveService
     @Environment(AudioPlayerService.self) private var playerService
+    @Environment(AlbumArtService.self) private var albumArtService
     @Query(sort: \Album.dateAdded, order: .reverse) private var albums: [Album]
     @State private var showAddAlbum = false
     @State private var showSettings = false
     @State private var selectedAlbum: Album?
     @State private var metadataEditorAlbum: Album?
+    @State private var albumPendingCoverChange: Album?
+    @State private var selectedCoverPhoto: PhotosPickerItem?
+    @State private var isShowingCoverPicker = false
+    @State private var isUploadingCover = false
+    @State private var coverUploadErrorMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -43,6 +50,14 @@ struct LibraryView: View {
                                     Label("Edit Metadata", systemImage: "pencil")
                                 }
                                 .disabled(!album.canEdit)
+                                Button {
+                                    albumPendingCoverChange = album
+                                    selectedCoverPhoto = nil
+                                    isShowingCoverPicker = true
+                                } label: {
+                                    Label("Change Album Cover", systemImage: "photo")
+                                }
+                                .disabled(!album.canEdit || isUploadingCover)
                                 Button("Remove from Library", role: .destructive) {
                                     modelContext.delete(album)
                                 }
@@ -113,12 +128,71 @@ struct LibraryView: View {
         .sheet(item: $metadataEditorAlbum) { album in
             AlbumMetadataEditorSheet(album: album)
         }
+        .photosPicker(
+            isPresented: $isShowingCoverPicker,
+            selection: $selectedCoverPhoto,
+            matching: .images
+        )
+        .task(id: selectedCoverPhoto?.itemIdentifier) {
+            await uploadSelectedCoverIfNeeded()
+        }
+        .alert(
+            "Couldn't Change Album Cover",
+            isPresented: Binding(
+                get: { coverUploadErrorMessage != nil },
+                set: { if !$0 { coverUploadErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(coverUploadErrorMessage ?? "")
+        }
         .safeAreaInset(edge: .bottom) {
             if playerService.currentTrack != nil {
                 Color.clear.frame(height: 64)
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: selectedAlbum != nil)
+    }
+
+    @MainActor
+    private func uploadSelectedCoverIfNeeded() async {
+        guard let selectedCoverPhoto, let album = albumPendingCoverChange, !isUploadingCover else { return }
+
+        isUploadingCover = true
+
+        defer {
+            isUploadingCover = false
+            self.selectedCoverPhoto = nil
+            albumPendingCoverChange = nil
+        }
+
+        do {
+            guard let selectedData = try await selectedCoverPhoto.loadTransferable(type: Data.self) else {
+                throw CoverUploadError.unreadableSelection
+            }
+            guard let image = UIImage(data: selectedData),
+                  let jpegData = image.jpegData(compressionQuality: 0.9) else {
+                throw CoverUploadError.invalidImageData
+            }
+
+            let previousCoverFileId = album.coverFileId
+            let coverItem = try await driveService.upsertCoverJPG(inFolder: album.googleFolderId, data: jpegData)
+
+            albumArtService.invalidateImage(for: previousCoverFileId)
+            albumArtService.invalidateImage(for: coverItem.id)
+
+            let cachedImage = albumArtService.cacheImageData(jpegData, for: coverItem.id)
+            let resolution = AlbumArtResolution(
+                image: cachedImage,
+                resolvedCoverItem: coverItem,
+                shouldPersistMetadata: true
+            )
+
+            albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
+        } catch {
+            coverUploadErrorMessage = error.localizedDescription
+        }
     }
 }
 
@@ -313,6 +387,7 @@ struct AlbumMetadataEditorSheet: View {
 
 struct AlbumArtworkThumbnail: View {
     let album: Album
+    @Environment(\.modelContext) private var modelContext
     @Environment(AlbumArtService.self) private var albumArtService
     @Environment(ThemeService.self) private var themeService
     @State private var image: UIImage?
@@ -344,12 +419,24 @@ struct AlbumArtworkThumbnail: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .task(id: album.coverFileId) {
-                guard let coverFileId = album.coverFileId else {
-                    image = nil
-                    return
-                }
-                image = await albumArtService.image(for: coverFileId)
+            .task(id: album.coverArtTaskID) {
+                let resolution = await albumArtService.resolveAlbumArt(for: album)
+                image = resolution.image
+                albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
             }
+    }
+}
+
+private enum CoverUploadError: LocalizedError {
+    case unreadableSelection
+    case invalidImageData
+
+    var errorDescription: String? {
+        switch self {
+        case .unreadableSelection:
+            return "The selected photo couldn't be loaded."
+        case .invalidImageData:
+            return "The selected photo couldn't be converted to a JPEG cover."
+        }
     }
 }

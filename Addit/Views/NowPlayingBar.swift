@@ -1,8 +1,10 @@
 import SwiftUI
 import UIKit
+import SwiftData
 
 struct NowPlayingBar: View {
     @Binding var showFullPlayer: Bool
+    @Environment(\.modelContext) private var modelContext
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(AlbumArtService.self) private var albumArtService
     @Environment(ThemeService.self) private var themeService
@@ -94,12 +96,14 @@ struct NowPlayingBar: View {
                 showFullPlayer = true
             }
         }
-        .task(id: playerService.currentTrack?.album?.coverFileId) {
-            guard let coverFileId = playerService.currentTrack?.album?.coverFileId else {
+        .task(id: playerService.currentTrack?.album?.coverArtTaskID) {
+            guard let album = playerService.currentTrack?.album else {
                 albumImage = nil
                 return
             }
-            albumImage = await albumArtService.image(for: coverFileId)
+            let resolution = await albumArtService.resolveAlbumArt(for: album)
+            albumImage = resolution.image
+            albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
         }
     }
 

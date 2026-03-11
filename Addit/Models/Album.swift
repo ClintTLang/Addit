@@ -37,4 +37,9 @@ final class Album {
         self.dateAdded = dateAdded
         self.canEdit = canEdit
     }
+
+    var coverArtTaskID: String {
+        let timestamp = coverUpdatedAt?.timeIntervalSince1970 ?? 0
+        return "\(coverFileId ?? "none")-\(timestamp)"
+    }
 }
