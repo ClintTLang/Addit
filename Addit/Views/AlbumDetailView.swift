@@ -80,7 +80,7 @@ struct AlbumDetailView: View {
                         } label: {
                             Label("Play All", systemImage: "play.fill")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.bordered)
 
                         Button {
                             playerService.playAlbum(album, shuffled: true)
