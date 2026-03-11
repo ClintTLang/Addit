@@ -246,6 +246,11 @@ struct FloatingAlbumPanel: View {
 struct AlbumCard: View {
     let album: Album
 
+    private var subtitle: String {
+        let trimmedArtist = album.artistName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedArtist.isEmpty ? "Unknown Artist" : trimmedArtist
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             AlbumArtworkThumbnail(album: album)
@@ -256,7 +261,7 @@ struct AlbumCard: View {
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
 
-            Text("\(album.trackCount) track\(album.trackCount == 1 ? "" : "s")")
+            Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
