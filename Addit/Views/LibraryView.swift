@@ -314,6 +314,7 @@ struct AlbumMetadataEditorSheet: View {
 struct AlbumArtworkThumbnail: View {
     let album: Album
     @Environment(AlbumArtService.self) private var albumArtService
+    @Environment(ThemeService.self) private var themeService
     @State private var image: UIImage?
     private let thumbnailSize: CGFloat = 148
 
@@ -321,7 +322,7 @@ struct AlbumArtworkThumbnail: View {
         RoundedRectangle(cornerRadius: 12)
             .fill(
                 LinearGradient(
-                    colors: [Color.accentColor.opacity(0.6), Color.accentColor.opacity(0.3)],
+                    colors: [themeService.accentColor.opacity(0.6), themeService.accentColor.opacity(0.3)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )

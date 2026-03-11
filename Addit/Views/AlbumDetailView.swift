@@ -418,13 +418,14 @@ struct TrackRow: View {
     let number: Int
     let isCurrentTrack: Bool
     let isPlaying: Bool
+    @Environment(ThemeService.self) private var themeService
 
     var body: some View {
         HStack(spacing: 12) {
             if isCurrentTrack {
                 Image(systemName: isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
                     .font(.caption)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(themeService.accentColor)
                     .frame(width: 24)
             } else {
                 Text("\(number)")
@@ -436,7 +437,7 @@ struct TrackRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.displayName)
                     .font(.body)
-                    .foregroundStyle(isCurrentTrack ? Color.accentColor : .primary)
+                    .foregroundStyle(isCurrentTrack ? themeService.accentColor : .primary)
                     .lineLimit(1)
 
                 if let size = track.fileSize {

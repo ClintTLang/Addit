@@ -4,6 +4,7 @@ import UIKit
 struct NowPlayingView: View {
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(AlbumArtService.self) private var albumArtService
+    @Environment(ThemeService.self) private var themeService
     @Environment(\.dismiss) private var dismiss
     @State private var seekValue: TimeInterval = 0
     @State private var albumImage: UIImage?
@@ -22,7 +23,7 @@ struct NowPlayingView: View {
             RoundedRectangle(cornerRadius: 20)
                 .fill(
                     LinearGradient(
-                        colors: [Color.accentColor.opacity(0.6), Color.accentColor.opacity(0.2)],
+                        colors: [themeService.accentColor.opacity(0.6), themeService.accentColor.opacity(0.2)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -80,7 +81,7 @@ struct NowPlayingView: View {
                         playerService.endSeeking(to: seekValue)
                     }
                 }
-                .tint(Color.accentColor)
+                .tint(themeService.accentColor)
 
                 HStack {
                     Text(formatTime(playerService.isSeeking ? seekValue : playerService.currentTime))
@@ -104,9 +105,9 @@ struct NowPlayingView: View {
                 Button {
                     playerService.toggleShuffle()
                 } label: {
-                    Image(systemName: "shuffle")
-                        .font(.title3)
-                        .foregroundStyle(playerService.isShuffleOn ? Color.accentColor : .secondary)
+                        Image(systemName: "shuffle")
+                            .font(.title3)
+                            .foregroundStyle(playerService.isShuffleOn ? themeService.accentColor : .secondary)
                 }
 
                 Button {
@@ -141,9 +142,9 @@ struct NowPlayingView: View {
                 Button {
                     playerService.cycleRepeatMode()
                 } label: {
-                    Image(systemName: repeatIcon)
-                        .font(.title3)
-                        .foregroundStyle(playerService.repeatMode == .off ? .secondary : Color.accentColor)
+                        Image(systemName: repeatIcon)
+                            .font(.title3)
+                            .foregroundStyle(playerService.repeatMode == .off ? .secondary : themeService.accentColor)
                 }
             }
 

@@ -5,6 +5,7 @@ struct NowPlayingBar: View {
     @Binding var showFullPlayer: Bool
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(AlbumArtService.self) private var albumArtService
+    @Environment(ThemeService.self) private var themeService
     @State private var seekValue: TimeInterval = 0
     @State private var isScrubbing = false
     @State private var albumImage: UIImage?
@@ -29,14 +30,14 @@ struct NowPlayingBar: View {
                     isScrubbing = false
                 }
             }
-            .tint(Color.accentColor)
+            .tint(themeService.accentColor)
             .frame(height: 16)
             .padding(.horizontal, 16)
             .padding(.top, 4)
 
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor.opacity(0.2))
+                    .fill(themeService.accentColor.opacity(0.2))
                     .frame(width: artworkSize, height: artworkSize)
                     .overlay {
                         Group {
@@ -47,7 +48,7 @@ struct NowPlayingBar: View {
                                     .frame(width: artworkSize, height: artworkSize)
                             } else {
                                 Image(systemName: "music.note")
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(themeService.accentColor)
                                     .frame(width: artworkSize, height: artworkSize)
                             }
                         }
