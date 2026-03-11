@@ -344,6 +344,9 @@ struct AlbumDetailView: View {
             // Sync artist name
             await syncArtistName()
 
+            // Sync JPEG cover art metadata
+            await syncCoverArtMetadata()
+
             album.trackCount = driveFiles.count
             try? modelContext.save()
         } catch {
@@ -432,6 +435,22 @@ struct AlbumDetailView: View {
             }
         } catch {
             // Keep existing local value on error
+        }
+    }
+
+    private func syncCoverArtMetadata() async {
+        do {
+            if let coverItem = try await driveService.findCoverJPG(inFolder: album.googleFolderId) {
+                album.coverFileId = coverItem.id
+                album.coverMimeType = coverItem.mimeType
+                album.coverUpdatedAt = .now
+            } else {
+                album.coverFileId = nil
+                album.coverMimeType = nil
+                album.coverUpdatedAt = nil
+            }
+        } catch {
+            // Keep existing cover metadata on error
         }
     }
 }

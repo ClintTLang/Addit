@@ -8,6 +8,7 @@ struct AdditApp: App {
     @State private var driveService = GoogleDriveService()
     @State private var playerService = AudioPlayerService()
     @State private var cacheService = AudioCacheService()
+    @State private var albumArtService = AlbumArtService()
 
     let modelContainer: ModelContainer
 
@@ -37,12 +38,14 @@ struct AdditApp: App {
                 .environment(driveService)
                 .environment(playerService)
                 .environment(cacheService)
+                .environment(albumArtService)
                 .onOpenURL { url in
                     GIDSignIn.sharedInstance.handle(url)
                 }
                 .task {
                     driveService.authService = authService
                     cacheService.driveService = driveService
+                    albumArtService.driveService = driveService
                     playerService.cacheService = cacheService
                     await authService.restorePreviousSignIn()
                 }

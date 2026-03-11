@@ -25,6 +25,13 @@ final class GoogleDriveService {
         return try await listFiles(query: query, pageToken: pageToken, pageSize: 1000, orderBy: "name")
     }
 
+    func findCoverJPG(inFolder folderId: String) async throws -> DriveItem? {
+        let query = "'\(folderId)' in parents and mimeType='image/jpeg' and trashed=false"
+        let response = try await listFiles(query: query, pageSize: 100, orderBy: "name")
+        guard !response.files.isEmpty else { return nil }
+        return response.files.sorted(by: compareCoverPriority).first
+    }
+
     func findFile(named fileName: String, inFolder folderId: String) async throws -> DriveItem? {
         let escaped = fileName.replacingOccurrences(of: "'", with: "\\'")
         let query = "'\(folderId)' in parents and name = '\(escaped)' and trashed=false"
@@ -193,6 +200,22 @@ final class GoogleDriveService {
         let (data, response) = try await session.data(for: request)
         try validateResponse(response)
         return try JSONDecoder().decode(DriveFileListResponse.self, from: data)
+    }
+
+    private func compareCoverPriority(_ lhs: DriveItem, _ rhs: DriveItem) -> Bool {
+        let lhsRank = coverNameRank(lhs.name)
+        let rhsRank = coverNameRank(rhs.name)
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    private func coverNameRank(_ fileName: String) -> Int {
+        let lower = fileName.lowercased()
+        let preferredTokens = ["cover", "folder", "front", "album"]
+        for (index, token) in preferredTokens.enumerated() where lower.contains(token) {
+            return index
+        }
+        return preferredTokens.count
     }
 
     private func getToken() async throws -> String {

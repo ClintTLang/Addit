@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
@@ -162,20 +163,7 @@ struct AlbumCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.accentColor.opacity(0.6), Color.accentColor.opacity(0.3)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
+            AlbumArtworkThumbnail(album: album)
 
             Text(album.name)
                 .font(.subheadline.bold())
@@ -194,5 +182,45 @@ struct AlbumCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct AlbumArtworkThumbnail: View {
+    let album: Album
+    @Environment(AlbumArtService.self) private var albumArtService
+    @State private var image: UIImage?
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(
+                LinearGradient(
+                    colors: [Color.accentColor.opacity(0.6), Color.accentColor.opacity(0.3)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                Group {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .transition(.opacity)
+                    } else {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .task(id: album.coverFileId) {
+                guard let coverFileId = album.coverFileId else {
+                    image = nil
+                    return
+                }
+                image = await albumArtService.image(for: coverFileId)
+            }
     }
 }
