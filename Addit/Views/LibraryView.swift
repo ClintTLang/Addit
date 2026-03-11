@@ -49,7 +49,6 @@ struct LibraryView: View {
                                 } label: {
                                     Label("Edit Metadata", systemImage: "pencil")
                                 }
-                                .disabled(!album.canEdit)
                                 Button {
                                     albumPendingCoverChange = album
                                     selectedCoverPhoto = nil
@@ -57,7 +56,7 @@ struct LibraryView: View {
                                 } label: {
                                     Label("Change Album Cover", systemImage: "photo")
                                 }
-                                .disabled(!album.canEdit || isUploadingCover)
+                                .disabled(isUploadingCover)
                                 Button("Remove from Library", role: .destructive) {
                                     modelContext.delete(album)
                                 }
