@@ -8,6 +8,7 @@ struct NowPlayingBar: View {
     @State private var seekValue: TimeInterval = 0
     @State private var isScrubbing = false
     @State private var albumImage: UIImage?
+    private let artworkSize: CGFloat = 44
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,16 +37,18 @@ struct NowPlayingBar: View {
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.accentColor.opacity(0.2))
-                    .frame(width: 44, height: 44)
+                    .frame(width: artworkSize, height: artworkSize)
                     .overlay {
                         Group {
                             if let albumImage {
                                 Image(uiImage: albumImage)
                                     .resizable()
                                     .scaledToFill()
+                                    .frame(width: artworkSize, height: artworkSize)
                             } else {
                                 Image(systemName: "music.note")
                                     .foregroundStyle(Color.accentColor)
+                                    .frame(width: artworkSize, height: artworkSize)
                             }
                         }
                     }

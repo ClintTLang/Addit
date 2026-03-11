@@ -315,6 +315,7 @@ struct AlbumArtworkThumbnail: View {
     let album: Album
     @Environment(AlbumArtService.self) private var albumArtService
     @State private var image: UIImage?
+    private let thumbnailSize: CGFloat = 148
 
     var body: some View {
         RoundedRectangle(cornerRadius: 12)
@@ -325,7 +326,7 @@ struct AlbumArtworkThumbnail: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .aspectRatio(1, contentMode: .fit)
+            .frame(width: thumbnailSize, height: thumbnailSize)
             .overlay {
                 Group {
                     if let image {
@@ -337,6 +338,7 @@ struct AlbumArtworkThumbnail: View {
                         Image(systemName: "music.note")
                             .font(.system(size: 40))
                             .foregroundStyle(.white.opacity(0.8))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
