@@ -104,11 +104,15 @@ struct AddAlbumView: View {
     }
 
     private func addToLibrary(folder: DriveItem, audioFiles: [DriveItem]) {
+        let existingAlbums = (try? modelContext.fetch(FetchDescriptor<Album>())) ?? []
+        let nextOrder = (existingAlbums.map(\.displayOrder).max() ?? -1) + 1
+
         let album = Album(
             googleFolderId: folder.id,
             name: folder.name,
             trackCount: audioFiles.count,
-            canEdit: folder.canEdit
+            canEdit: folder.canEdit,
+            displayOrder: nextOrder
         )
         modelContext.insert(album)
 
@@ -138,19 +142,19 @@ struct AddAlbumView: View {
 
     private func initializeTracklist(for album: Album, audioFiles: [DriveItem]) async {
         do {
+            // Only create if it doesn't already exist — never overwrite existing metadata
+            let existing = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId)
+            guard existing == nil else { return }
+
             let tracklistContent = audioFiles.map(\.name).joined(separator: "\n")
             guard let data = tracklistContent.data(using: .utf8) else { return }
 
-            if let existing = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId) {
-                try await driveService.updateFileData(fileId: existing.id, data: data, mimeType: "text/plain")
-            } else {
-                _ = try await driveService.createFile(
-                    name: ".addit-tracklist",
-                    mimeType: "text/plain",
-                    inFolder: album.googleFolderId,
-                    data: data
-                )
-            }
+            _ = try await driveService.createFile(
+                name: ".addit-tracklist",
+                mimeType: "text/plain",
+                inFolder: album.googleFolderId,
+                data: data
+            )
         } catch {
             // Best effort — will be created on next sync or edit
         }

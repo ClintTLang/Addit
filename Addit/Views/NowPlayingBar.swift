@@ -24,24 +24,23 @@ struct NowPlayingBar: View {
     var body: some View {
         VStack(spacing: 0) {
             // Draggable scrubber
-            Slider(
-                value: Binding(
-                    get: { isScrubbing ? seekValue : playerService.currentTime },
-                    set: { seekValue = $0; playerService.currentTime = $0 }
-                ),
-                in: 0...max(playerService.duration, 1)
-            ) { editing in
-                if editing {
-                    isScrubbing = true
-                    seekValue = playerService.currentTime
-                    playerService.beginSeeking()
-                } else {
-                    playerService.endSeeking(to: seekValue)
+            MiniScrubber(
+                value: isScrubbing ? seekValue : playerService.currentTime,
+                duration: playerService.duration,
+                accentColor: themeService.accentColor,
+                onChanged: { newValue in
+                    if !isScrubbing {
+                        isScrubbing = true
+                        playerService.beginSeeking()
+                    }
+                    seekValue = newValue
+                    playerService.currentTime = newValue
+                },
+                onEnded: { finalValue in
+                    playerService.endSeeking(to: finalValue)
                     isScrubbing = false
                 }
-            }
-            .tint(themeService.accentColor)
-            .frame(height: 16)
+            )
             .padding(.horizontal, 16)
             .padding(.top, 8)
 
@@ -123,5 +122,59 @@ struct NowPlayingBar: View {
             return "\(artistName) \u{2014} \(albumName)"
         }
         return albumName
+    }
+}
+
+private struct MiniScrubber: View {
+    let value: TimeInterval
+    let duration: TimeInterval
+    let accentColor: Color
+    let onChanged: (TimeInterval) -> Void
+    let onEnded: (TimeInterval) -> Void
+
+    private let trackHeight: CGFloat = 3
+    private let thumbSize: CGFloat = 12
+
+    private var progress: Double {
+        duration > 0 ? value / duration : 0
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let thumbX = width * progress
+
+            ZStack(alignment: .leading) {
+                // Track background
+                Capsule()
+                    .fill(accentColor.opacity(0.2))
+                    .frame(height: trackHeight)
+
+                // Filled track
+                Capsule()
+                    .fill(accentColor)
+                    .frame(width: max(0, thumbX), height: trackHeight)
+
+                // Thumb
+                Circle()
+                    .fill(accentColor)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: max(0, min(thumbX - thumbSize / 2, width - thumbSize)))
+            }
+            .frame(height: thumbSize)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let fraction = max(0, min(1, drag.location.x / width))
+                        onChanged(fraction * max(duration, 1))
+                    }
+                    .onEnded { drag in
+                        let fraction = max(0, min(1, drag.location.x / width))
+                        onEnded(fraction * max(duration, 1))
+                    }
+            )
+        }
+        .frame(height: thumbSize)
     }
 }

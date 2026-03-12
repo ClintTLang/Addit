@@ -3,33 +3,27 @@ import SwiftData
 
 struct AlbumDetailView: View {
     let album: Album
-    let embeddedInPanel: Bool
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(GoogleDriveService.self) private var driveService
+    @Environment(AlbumArtService.self) private var albumArtService
+    @Environment(ThemeService.self) private var themeService
     @Environment(\.modelContext) private var modelContext
     @State private var isSyncing = true
     @State private var syncError: String?
-    @State private var isReordering = false
-    @State private var reorderedTracks: [Track] = []
-    @State private var tracklistFileId: String?
-    @State private var isSavingOrder = false
-    @State private var editMode: EditMode = .inactive
-    @State private var artistFileId: String?
-    @State private var isEditingArtist = false
-    @State private var editedArtistName = ""
-    @State private var isEditingAlbumName = false
-    @State private var editedAlbumName = ""
-    @State private var isEditingTrackName = false
-    @State private var editedTrackName = ""
-    @State private var trackBeingRenamed: Track?
+    @State private var showEditSheet = false
+    @State private var albumImage: UIImage?
 
-    init(album: Album, embeddedInPanel: Bool = false) {
-        self.album = album
-        self.embeddedInPanel = embeddedInPanel
-    }
+    private let coverSize: CGFloat = 200
 
     private var sortedTracks: [Track] {
         album.tracks.sorted { $0.trackNumber < $1.trackNumber }
+    }
+
+    private var artworkTaskID: String? {
+        let refreshMarker = albumArtService.lastUpdatedAlbumFolderId == album.googleFolderId
+            ? albumArtService.artworkRefreshVersion
+            : 0
+        return "\(album.coverArtTaskID)-\(refreshMarker)"
     }
 
     var body: some View {
@@ -43,37 +37,63 @@ struct AlbumDetailView: View {
                     }
                     .listRowBackground(Color.clear)
                 }
-            } else if isReordering {
-                Section {
-                    ForEach(reorderedTracks) { track in
-                        Text(track.displayName)
-                            .font(.body)
-                            .lineLimit(1)
-                            .padding(.vertical, 4)
-                    }
-                    .onMove(perform: moveTrack)
-                    .deleteDisabled(true)
-                }
             } else {
+                // Album header: cover art, title, artist, play buttons
                 Section {
-                    HStack(spacing: 12) {
-                        Button {
-                            playerService.playAlbum(album)
-                        } label: {
-                            Label("Play", systemImage: "play.fill")
-                        }
-                        .buttonStyle(.bordered)
+                    VStack(spacing: 16) {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [themeService.accentColor.opacity(0.6), themeService.accentColor.opacity(0.3)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: coverSize, height: coverSize)
+                            .overlay {
+                                if let albumImage {
+                                    Image(uiImage: albumImage)
+                                        .resizable()
+                                        .scaledToFill()
+                                } else {
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 48))
+                                        .foregroundStyle(.white.opacity(0.8))
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                        Button {
-                            playerService.playAlbum(album, shuffled: true)
-                        } label: {
-                            Label("Shuffle", systemImage: "shuffle")
+                        VStack(spacing: 4) {
+                            Text(album.name)
+                                .font(.title2.bold())
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+
+                            Text(album.artistName ?? "Unknown Artist")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.bordered)
+
+                        HStack(spacing: 12) {
+                            Button {
+                                playerService.playAlbum(album)
+                            } label: {
+                                Image(systemName: "play.fill")
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button {
+                                playerService.playAlbum(album, shuffled: true)
+                            } label: {
+                                Image(systemName: "shuffle")
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
-                    .padding(.vertical, 4)
                 }
 
                 Section {
@@ -82,13 +102,8 @@ struct AlbumDetailView: View {
                             track: track,
                             number: index + 1,
                             isCurrentTrack: playerService.currentTrack?.googleFileId == track.googleFileId,
-                            isPlaying: playerService.currentTrack?.googleFileId == track.googleFileId && playerService.isPlaying,
-                            canEdit: album.canEdit
-                        ) {
-                            editedTrackName = track.displayName
-                            trackBeingRenamed = track
-                            isEditingTrackName = true
-                        }
+                            isPlaying: playerService.currentTrack?.googleFileId == track.googleFileId && playerService.isPlaying
+                        )
                         .contentShape(Rectangle())
                         .onTapGesture {
                             playerService.playTrack(track, inQueue: sortedTracks)
@@ -105,78 +120,19 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        .environment(\.editMode, $editMode)
         .navigationTitle(album.name)
-        .navigationBarTitleDisplayMode(embeddedInPanel ? .inline : .automatic)
-        .scrollContentBackground(embeddedInPanel ? .hidden : .visible)
-        .background(embeddedInPanel ? Color.clear : Color(.systemBackground))
-        .toolbarBackground(embeddedInPanel ? .hidden : .visible, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if album.canEdit && !isReordering && !isSyncing {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        startReordering()
-                    } label: {
-                        Label("Reorder", systemImage: "arrow.up.arrow.down")
-                    }
-                    .disabled(album.tracks.isEmpty)
-                }
-            }
-            if isReordering {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        cancelReordering()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isSavingOrder {
-                        ProgressView()
-                    } else {
-                        Button("Done") {
-                            Task { await saveTrackOrder() }
-                        }
-                    }
-                }
-            }
-        }
-        .toolbarTitleMenu {
-            if album.canEdit && !isReordering && !isSyncing {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
-                    editedAlbumName = album.name
-                    isEditingAlbumName = true
+                    showEditSheet = true
                 } label: {
-                    Label("Rename Album", systemImage: "pencil")
+                    Label("Edit", systemImage: "pencil")
                 }
             }
         }
-        .alert("Artist Name", isPresented: $isEditingArtist) {
-            TextField("Artist name", text: $editedArtistName)
-            Button("Save") {
-                Task { await saveArtistName() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Enter the artist or band name for this album")
-        }
-        .alert("Rename Album", isPresented: $isEditingAlbumName) {
-            TextField("Album name", text: $editedAlbumName)
-            Button("Save") {
-                Task { await saveAlbumName() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Enter a new name for this album")
-        }
-        .alert("Rename Track", isPresented: $isEditingTrackName) {
-            TextField("Track name", text: $editedTrackName)
-            Button("Save") {
-                Task { await saveTrackName() }
-            }
-            Button("Cancel", role: .cancel) {
-                trackBeingRenamed = nil
-            }
-        } message: {
-            Text("Enter a new name for this track")
+        .sheet(isPresented: $showEditSheet) {
+            AlbumMetadataEditorSheet(album: album)
         }
         .refreshable {
             await syncFromDrive()
@@ -184,178 +140,21 @@ struct AlbumDetailView: View {
         .task {
             await syncFromDrive()
         }
+        .task(id: artworkTaskID) {
+            let resolution = await albumArtService.resolveAlbumArt(for: album)
+            albumImage = resolution.image
+            albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
+        }
         .safeAreaInset(edge: .bottom) {
-            if playerService.currentTrack != nil && !isReordering {
+            if playerService.currentTrack != nil {
                 Color.clear.frame(height: 64)
             }
-        }
-    }
-
-    // MARK: - Reorder
-
-    private func startReordering() {
-        reorderedTracks = sortedTracks
-        editMode = .active
-        isReordering = true
-    }
-
-    private func cancelReordering() {
-        editMode = .inactive
-        isReordering = false
-        reorderedTracks = []
-    }
-
-    private func moveTrack(from source: IndexSet, to destination: Int) {
-        reorderedTracks.move(fromOffsets: source, toOffset: destination)
-    }
-
-    private func saveTrackOrder() async {
-        isSavingOrder = true
-        defer { isSavingOrder = false }
-
-        let content = reorderedTracks.map(\.name).joined(separator: "\n")
-        guard let data = content.data(using: .utf8) else { return }
-
-        do {
-            if let existingId = tracklistFileId {
-                try await driveService.updateFileData(fileId: existingId, data: data, mimeType: "text/plain")
-            } else {
-                let item = try await driveService.createFile(
-                    name: ".addit-tracklist",
-                    mimeType: "text/plain",
-                    inFolder: album.googleFolderId,
-                    data: data
-                )
-                tracklistFileId = item.id
-            }
-
-            // Update local track numbers
-            for (index, track) in reorderedTracks.enumerated() {
-                track.trackNumber = index + 1
-            }
-            try? modelContext.save()
-
-            editMode = .inactive
-            isReordering = false
-            reorderedTracks = []
-        } catch {
-            syncError = "Failed to save order: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Artist
-
-    private func saveArtistName() async {
-        let trimmed = editedArtistName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newName: String? = trimmed.isEmpty ? nil : trimmed
-
-        album.artistName = newName
-        try? modelContext.save()
-
-        guard let data = (newName ?? "").data(using: .utf8) else { return }
-
-        do {
-            if let existingId = artistFileId {
-                try await driveService.updateFileData(fileId: existingId, data: data, mimeType: "text/plain")
-            } else {
-                let item = try await driveService.createFile(
-                    name: ".addit-artist",
-                    mimeType: "text/plain",
-                    inFolder: album.googleFolderId,
-                    data: data
-                )
-                artistFileId = item.id
-            }
-        } catch {
-            syncError = "Failed to save artist: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Rename Album
-
-    private func saveAlbumName() async {
-        let trimmed = editedAlbumName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != album.name else { return }
-
-        let oldName = album.name
-        album.name = trimmed
-        try? modelContext.save()
-
-        do {
-            try await driveService.renameFile(fileId: album.googleFolderId, newName: trimmed)
-        } catch {
-            // Revert on failure
-            album.name = oldName
-            try? modelContext.save()
-            syncError = "Failed to rename album: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Rename Track
-
-    private func saveTrackName() async {
-        guard let track = trackBeingRenamed else { return }
-        let trimmed = editedTrackName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            trackBeingRenamed = nil
-            return
-        }
-
-        // Preserve the original file extension
-        let originalExtension = (track.name as NSString).pathExtension
-        let newFileName: String
-        if originalExtension.isEmpty {
-            newFileName = trimmed
-        } else {
-            newFileName = "\(trimmed).\(originalExtension)"
-        }
-
-        guard newFileName != track.name else {
-            trackBeingRenamed = nil
-            return
-        }
-
-        let oldName = track.name
-
-        // Update locally first
-        track.name = newFileName
-        try? modelContext.save()
-
-        do {
-            try await driveService.renameFile(fileId: track.googleFileId, newName: newFileName)
-
-            // Update the tracklist file if it exists, replacing old name with new
-            await updateTracklistAfterRename(oldName: oldName, newName: newFileName)
-        } catch {
-            // Revert on failure
-            track.name = oldName
-            try? modelContext.save()
-            syncError = "Failed to rename track: \(error.localizedDescription)"
-        }
-
-        trackBeingRenamed = nil
-    }
-
-    private func updateTracklistAfterRename(oldName: String, newName: String) async {
-        guard let tracklistId = tracklistFileId else { return }
-
-        do {
-            let data = try await driveService.downloadFileData(fileId: tracklistId)
-            guard var content = String(data: data, encoding: .utf8) else { return }
-
-            content = content.replacingOccurrences(of: oldName, with: newName)
-
-            guard let updatedData = content.data(using: .utf8) else { return }
-            try await driveService.updateFileData(fileId: tracklistId, data: updatedData, mimeType: "text/plain")
-        } catch {
-            // Non-critical — tracklist will still work on next reorder
         }
     }
 
     // MARK: - Sync
 
     private func syncFromDrive() async {
-        guard !isReordering else { return }
         isSyncing = true
         syncError = nil
         defer { isSyncing = false }
@@ -421,7 +220,6 @@ struct AlbumDetailView: View {
             let tracklistItem = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId)
 
             if let tracklistItem {
-                tracklistFileId = tracklistItem.id
                 let data = try await driveService.downloadFileData(fileId: tracklistItem.id)
                 if let content = String(data: data, encoding: .utf8) {
                     let orderedNames = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
@@ -453,7 +251,6 @@ struct AlbumDetailView: View {
         }
 
         // Default: alphabetical order from Drive API response
-        tracklistFileId = nil
         for (index, file) in driveFiles.enumerated() {
             if let track = album.tracks.first(where: { $0.googleFileId == file.id }) {
                 track.trackNumber = index + 1
@@ -466,14 +263,11 @@ struct AlbumDetailView: View {
             let artistItem = try await driveService.findFile(named: ".addit-artist", inFolder: album.googleFolderId)
 
             if let artistItem {
-                artistFileId = artistItem.id
                 let data = try await driveService.downloadFileData(fileId: artistItem.id)
                 if let content = String(data: data, encoding: .utf8) {
                     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
                     album.artistName = trimmed.isEmpty ? nil : trimmed
                 }
-            } else {
-                artistFileId = nil
             }
         } catch {
             // Keep existing local value on error
@@ -504,8 +298,6 @@ struct TrackRow: View {
     let number: Int
     let isCurrentTrack: Bool
     let isPlaying: Bool
-    var canEdit: Bool = false
-    var onRename: (() -> Void)?
     @Environment(ThemeService.self) private var themeService
 
     var body: some View {
@@ -538,15 +330,6 @@ struct TrackRow: View {
             Spacer()
         }
         .padding(.vertical, 2)
-        .contextMenu {
-            if canEdit {
-                Button {
-                    onRename?()
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-            }
-        }
     }
 
     private func formatFileSize(_ bytes: Int64) -> String {

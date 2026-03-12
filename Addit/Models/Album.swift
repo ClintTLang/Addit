@@ -12,6 +12,7 @@ final class Album {
     var trackCount: Int
     var dateAdded: Date
     var canEdit: Bool
+    var displayOrder: Int = 0
 
     @Relationship(deleteRule: .cascade, inverse: \Track.album)
     var tracks: [Track] = []
@@ -25,7 +26,8 @@ final class Album {
         coverUpdatedAt: Date? = nil,
         trackCount: Int,
         dateAdded: Date = .now,
-        canEdit: Bool = false
+        canEdit: Bool = false,
+        displayOrder: Int = 0
     ) {
         self.googleFolderId = googleFolderId
         self.name = name
@@ -36,6 +38,7 @@ final class Album {
         self.trackCount = trackCount
         self.dateAdded = dateAdded
         self.canEdit = canEdit
+        self.displayOrder = displayOrder
     }
 
     var coverArtTaskID: String {

@@ -77,21 +77,22 @@ struct NowPlayingView: View {
 
             // Scrubber
             VStack(spacing: 4) {
-                Slider(
-                    value: Binding(
-                        get: { playerService.isSeeking ? seekValue : playerService.currentTime },
-                        set: { seekValue = $0; playerService.currentTime = $0 }
-                    ),
-                    in: 0...max(playerService.duration, 1)
-                ) { editing in
-                    if editing {
-                        seekValue = playerService.currentTime
-                        playerService.beginSeeking()
-                    } else {
-                        playerService.endSeeking(to: seekValue)
+                FullScrubber(
+                    value: playerService.isSeeking ? seekValue : playerService.currentTime,
+                    duration: playerService.duration,
+                    accentColor: themeService.accentColor,
+                    onChanged: { newValue in
+                        if !playerService.isSeeking {
+                            seekValue = playerService.currentTime
+                            playerService.beginSeeking()
+                        }
+                        seekValue = newValue
+                        playerService.currentTime = newValue
+                    },
+                    onEnded: { finalValue in
+                        playerService.endSeeking(to: finalValue)
                     }
-                }
-                .tint(themeService.accentColor)
+                )
 
                 HStack {
                     Text(formatTime(playerService.isSeeking ? seekValue : playerService.currentTime))
@@ -202,5 +203,56 @@ struct NowPlayingView: View {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+private struct FullScrubber: View {
+    let value: TimeInterval
+    let duration: TimeInterval
+    let accentColor: Color
+    let onChanged: (TimeInterval) -> Void
+    let onEnded: (TimeInterval) -> Void
+
+    private let trackHeight: CGFloat = 4
+    private let thumbSize: CGFloat = 14
+
+    private var progress: Double {
+        duration > 0 ? value / duration : 0
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let thumbX = width * progress
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(accentColor.opacity(0.2))
+                    .frame(height: trackHeight)
+
+                Capsule()
+                    .fill(accentColor)
+                    .frame(width: max(0, thumbX), height: trackHeight)
+
+                Circle()
+                    .fill(accentColor)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: max(0, min(thumbX - thumbSize / 2, width - thumbSize)))
+            }
+            .frame(height: thumbSize)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let fraction = max(0, min(1, drag.location.x / width))
+                        onChanged(fraction * max(duration, 1))
+                    }
+                    .onEnded { drag in
+                        let fraction = max(0, min(1, drag.location.x / width))
+                        onEnded(fraction * max(duration, 1))
+                    }
+            )
+        }
+        .frame(height: thumbSize)
     }
 }

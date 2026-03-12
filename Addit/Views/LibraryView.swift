@@ -9,32 +9,56 @@ struct LibraryView: View {
     @Environment(GoogleDriveService.self) private var driveService
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(AlbumArtService.self) private var albumArtService
-    @Query(sort: \Album.dateAdded, order: .reverse) private var albums: [Album]
+    @Query(sort: \Album.displayOrder) private var albums: [Album]
     @State private var showAddAlbum = false
     @State private var showSettings = false
-    @State private var selectedAlbum: Album?
     @State private var metadataEditorAlbum: Album?
+    @State private var isArranging = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
     var body: some View {
-        ZStack {
-            ScrollView {
-                if albums.isEmpty {
+        Group {
+            if albums.isEmpty {
+                ScrollView {
                     ContentUnavailableView(
                         "No Albums Yet",
                         systemImage: "music.note.list",
                         description: Text("Tap + to add folders from Google Drive")
                     )
                     .padding(.top, 100)
-                } else {
+                }
+            } else if isArranging {
+                List {
+                    ForEach(albums) { album in
+                        HStack(spacing: 12) {
+                            AlbumArtworkThumbnail(album: album, size: 48)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(album.name)
+                                    .font(.body.bold())
+                                    .lineLimit(1)
+                                Text(album.artistName ?? "Unknown Artist")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .onMove { source, destination in
+                        var ordered = albums.map { $0 }
+                        ordered.move(fromOffsets: source, toOffset: destination)
+                        for (index, album) in ordered.enumerated() {
+                            album.displayOrder = index
+                        }
+                    }
+                }
+                .environment(\.editMode, .constant(.active))
+            } else {
+                ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(albums) { album in
-                            Button {
-                                withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
-                                    selectedAlbum = album
-                                }
-                            } label: {
+                            NavigationLink(value: album) {
                                 AlbumCard(album: album)
                             }
                             .buttonStyle(.plain)
@@ -43,6 +67,11 @@ struct LibraryView: View {
                                     metadataEditorAlbum = album
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
+                                }
+                                Button {
+                                    isArranging = true
+                                } label: {
+                                    Label("Arrange", systemImage: "arrow.up.arrow.down")
                                 }
                                 Button("Remove from Library", role: .destructive) {
                                     modelContext.delete(album)
@@ -53,55 +82,42 @@ struct LibraryView: View {
                     .padding()
                 }
             }
-
-            if let selectedAlbum {
-                Color.black.opacity(0.25)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
-                            self.selectedAlbum = nil
-                        }
-                    }
-                    .transition(.opacity)
-
-                FloatingAlbumPanel(album: selectedAlbum) {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
-                        self.selectedAlbum = nil
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 24)
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.95).combined(with: .opacity),
-                    removal: .opacity
-                ))
-                .zIndex(1)
-            }
         }
-        .navigationTitle("Library")
+        .navigationTitle(isArranging ? "Arrange Library" : "Library")
+        .navigationDestination(for: Album.self) { album in
+            AlbumDetailView(album: album)
+        }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showAddAlbum = true } label: {
-                    Image(systemName: "plus")
+            if isArranging {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        try? modelContext.save()
+                        isArranging = false
+                    }
                 }
-            }
-            ToolbarItem(placement: .navigationBarLeading) {
-                Menu {
-                    if let name = authService.userName {
-                        Text(name)
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showAddAlbum = true } label: {
+                        Image(systemName: "plus")
                     }
-                    Button {
-                        showSettings = true
+                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu {
+                        if let name = authService.userName {
+                            Text(name)
+                        }
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Text("Settings")
+                        }
+                        .tint(.secondary)
+                        Button("Sign Out", role: .destructive) {
+                            authService.signOut()
+                        }
                     } label: {
-                        Text("Settings")
+                        Image(systemName: "person.crop.circle")
                     }
-                    .tint(.secondary)
-                    Button("Sign Out", role: .destructive) {
-                        authService.signOut()
-                    }
-                } label: {
-                    Image(systemName: "person.crop.circle")
                 }
             }
         }
@@ -114,61 +130,26 @@ struct LibraryView: View {
         .sheet(item: $metadataEditorAlbum) { album in
             AlbumMetadataEditorSheet(album: album)
         }
+        .task {
+            initializeDisplayOrder()
+        }
         .safeAreaInset(edge: .bottom) {
             if playerService.currentTrack != nil {
                 Color.clear.frame(height: 64)
             }
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: selectedAlbum != nil)
     }
 
-}
-
-struct FloatingAlbumPanel: View {
-    let album: Album
-    let onClose: () -> Void
-
-    var body: some View {
-        GeometryReader { proxy in
-            NavigationStack {
-                AlbumDetailView(album: album, embeddedInPanel: true)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                onClose()
-                            } label: {
-                                Image(systemName: "xmark")
-                            }
-                            .accessibilityLabel("Close")
-                        }
-                    }
-            }
-            .frame(
-                width: min(700, proxy.size.width - 24),
-                height: min(760, proxy.size.height * 0.86)
-            )
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-            }
-            .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.16), .clear],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(height: 120)
-                    .allowsHitTesting(false)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .shadow(color: .black.opacity(0.25), radius: 30, y: 14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    private func initializeDisplayOrder() {
+        let needsInit = albums.count > 1 && albums.allSatisfy { $0.displayOrder == 0 }
+        guard needsInit else { return }
+        let sorted = albums.sorted { $0.dateAdded > $1.dateAdded }
+        for (index, album) in sorted.enumerated() {
+            album.displayOrder = index
         }
+        try? modelContext.save()
     }
+
 }
 
 struct AlbumCard: View {
@@ -562,11 +543,11 @@ struct AlbumMetadataEditorSheet: View {
 
 struct AlbumArtworkThumbnail: View {
     let album: Album
+    var size: CGFloat = 148
     @Environment(\.modelContext) private var modelContext
     @Environment(AlbumArtService.self) private var albumArtService
     @Environment(ThemeService.self) private var themeService
     @State private var image: UIImage?
-    private let thumbnailSize: CGFloat = 148
 
     private var artworkTaskID: String {
         let refreshMarker = albumArtService.lastUpdatedAlbumFolderId == album.googleFolderId
@@ -584,7 +565,7 @@ struct AlbumArtworkThumbnail: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .frame(width: thumbnailSize, height: thumbnailSize)
+            .frame(width: size, height: size)
             .overlay {
                 Group {
                     if let image {
@@ -594,7 +575,7 @@ struct AlbumArtworkThumbnail: View {
                             .transition(.opacity)
                     } else {
                         Image(systemName: "music.note")
-                            .font(.system(size: 40))
+                            .font(.system(size: size * 0.27))
                             .foregroundStyle(.white.opacity(0.8))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
