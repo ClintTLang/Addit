@@ -16,7 +16,6 @@ struct ContentView: View {
 
                     if playerService.currentTrack != nil {
                         NowPlayingBar(showFullPlayer: $showNowPlaying)
-                            .transition(.move(edge: .bottom))
                     }
                 }
                 .sheet(isPresented: $showNowPlaying) {

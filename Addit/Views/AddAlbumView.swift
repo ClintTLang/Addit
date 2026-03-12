@@ -127,6 +127,7 @@ struct AddAlbumView: View {
         do {
             try modelContext.save()
             Task {
+                await initializeTracklist(for: album, audioFiles: audioFiles)
                 await syncCoverArt(for: album, folderId: folder.id)
             }
             addedSuccessfully = true
@@ -135,13 +136,28 @@ struct AddAlbumView: View {
         }
     }
 
-    private func syncCoverArt(for album: Album, folderId: String) async {
-        // Only look for cover.* in addit-data/ subfolder
-        var coverItem: DriveItem?
-        if let additDataItem = try? await driveService.findFile(named: "addit-data", inFolder: folderId),
-           additDataItem.isFolder {
-            coverItem = try? await driveService.findCoverImage(inFolder: additDataItem.id)
+    private func initializeTracklist(for album: Album, audioFiles: [DriveItem]) async {
+        do {
+            let tracklistContent = audioFiles.map(\.name).joined(separator: "\n")
+            guard let data = tracklistContent.data(using: .utf8) else { return }
+
+            if let existing = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId) {
+                try await driveService.updateFileData(fileId: existing.id, data: data, mimeType: "text/plain")
+            } else {
+                _ = try await driveService.createFile(
+                    name: ".addit-tracklist",
+                    mimeType: "text/plain",
+                    inFolder: album.googleFolderId,
+                    data: data
+                )
+            }
+        } catch {
+            // Best effort — will be created on next sync or edit
         }
+    }
+
+    private func syncCoverArt(for album: Album, folderId: String) async {
+        let coverItem = try? await driveService.findCoverImage(inFolder: folderId)
         if let coverItem {
             album.coverFileId = coverItem.id
             album.coverMimeType = coverItem.mimeType
@@ -273,7 +289,7 @@ struct FolderBrowserView: View {
                 case .shared:
                     response = try await driveService.listSharedFolders()
                 }
-                subfolders = response.files.filter { $0.name != "addit-data" }
+                subfolders = response.files
                 audioFiles = []
             } else {
                 async let foldersResponse = driveService.listSubfolders(inFolder: folderId!)
@@ -282,7 +298,7 @@ struct FolderBrowserView: View {
                 let folders = try await foldersResponse
                 let audio = try await audioResponse
 
-                subfolders = folders.files.filter { $0.name != "addit-data" }
+                subfolders = folders.files
                 audioFiles = audio.files
             }
         } catch {

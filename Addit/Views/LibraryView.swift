@@ -207,11 +207,11 @@ struct AlbumMetadataEditorSheet: View {
     @State private var editedArtist = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var additDataFolderId: String?
     @State private var selectedCoverPhoto: PhotosPickerItem?
     @State private var isUploadingCover = false
     @State private var coverUploadErrorMessage: String?
     @State private var coverImage: UIImage?
+    @State private var imageToCrop: CropItem?
     @State private var reorderedTracks: [Track] = []
     @State private var editedTrackNames: [String: String] = [:]
     @State private var tracklistFileId: String?
@@ -363,12 +363,19 @@ struct AlbumMetadataEditorSheet: View {
                 reorderedTracks = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
                 let resolution = await albumArtService.resolveAlbumArt(for: album)
                 coverImage = resolution.image
-                await resolveAdditDataFolder()
                 await resolveTracklistFileId()
             }
             .onChange(of: selectedCoverPhoto) { _, newValue in
-                if newValue != nil {
-                    Task { await uploadSelectedCover() }
+                guard let newValue else { return }
+                Task {
+                    guard let data = try? await newValue.loadTransferable(type: Data.self),
+                          let loaded = UIImage(data: data) else {
+                        coverUploadErrorMessage = "The selected photo couldn't be loaded."
+                        selectedCoverPhoto = nil
+                        return
+                    }
+                    selectedCoverPhoto = nil
+                    imageToCrop = CropItem(image: loaded)
                 }
             }
             .alert(
@@ -381,6 +388,18 @@ struct AlbumMetadataEditorSheet: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(coverUploadErrorMessage ?? "")
+            }
+            .fullScreenCover(item: $imageToCrop) { item in
+                ImageCropperView(
+                    image: item.image,
+                    onCropped: { croppedImage in
+                        imageToCrop = nil
+                        Task { await uploadCroppedCover(croppedImage) }
+                    },
+                    onCancelled: {
+                        imageToCrop = nil
+                    }
+                )
             }
         }
     }
@@ -395,8 +414,11 @@ struct AlbumMetadataEditorSheet: View {
         let trimmedArtist = editedArtist.trimmingCharacters(in: .whitespacesAndNewlines)
         let newArtist: String? = trimmedArtist.isEmpty ? nil : trimmedArtist
 
+        // Snapshot current state for rollback
         let previousName = album.name
         let previousArtist = album.artistName
+        let previousTrackNames = Dictionary(uniqueKeysWithValues: reorderedTracks.map { ($0.googleFileId, $0.name) })
+        let previousTrackNumbers = Dictionary(uniqueKeysWithValues: reorderedTracks.map { ($0.googleFileId, $0.trackNumber) })
 
         album.name = trimmedTitle
         album.artistName = newArtist
@@ -406,52 +428,50 @@ struct AlbumMetadataEditorSheet: View {
             // Rename the actual Drive folder
             try await driveService.renameFile(fileId: album.googleFolderId, newName: trimmedTitle)
 
-            // Save artist to addit-data metadata file
-            let folderId = additDataFolderId ?? album.googleFolderId
+            // Save artist metadata file
             try await upsertMetadataFile(
                 named: ".addit-artist",
                 content: newArtist ?? "",
-                inFolder: folderId
+                inFolder: album.googleFolderId
             )
 
             // Rename changed tracks in Drive
             try await renameChangedTracks()
 
             // Save track order (uses updated names)
-            try await saveTrackOrder(inFolder: folderId)
+            try await saveTrackOrder(inFolder: album.googleFolderId)
 
             dismiss()
         } catch {
-            // Revert local changes on failure
+            // Revert all local changes on failure
             album.name = previousName
             album.artistName = previousArtist
+            for track in reorderedTracks {
+                if let oldName = previousTrackNames[track.googleFileId] {
+                    track.name = oldName
+                }
+                if let oldNumber = previousTrackNumbers[track.googleFileId] {
+                    track.trackNumber = oldNumber
+                }
+            }
             try? modelContext.save()
             errorMessage = error.localizedDescription
         }
     }
 
-    @MainActor
-    private func uploadSelectedCover() async {
-        guard let selectedCoverPhoto, !isUploadingCover else { return }
+    private func uploadCroppedCover(_ croppedImage: UIImage) async {
+        guard !isUploadingCover else { return }
 
         isUploadingCover = true
-        defer {
-            isUploadingCover = false
-            self.selectedCoverPhoto = nil
-        }
+        defer { isUploadingCover = false }
 
         do {
-            guard let selectedData = try await selectedCoverPhoto.loadTransferable(type: Data.self) else {
-                throw CoverUploadError.unreadableSelection
-            }
-            guard let image = UIImage(data: selectedData),
-                  let jpegData = image.jpegData(compressionQuality: 0.9) else {
+            guard let jpegData = croppedImage.jpegData(compressionQuality: 0.9) else {
                 throw CoverUploadError.invalidImageData
             }
 
             let previousCoverFileId = album.coverFileId
-            let additDataFolder = try await driveService.findOrCreateFolder(named: "addit-data", inParent: album.googleFolderId)
-            let coverItem = try await driveService.upsertCoverImage(inFolder: additDataFolder.id, data: jpegData)
+            let coverItem = try await driveService.upsertCoverImage(inFolder: album.googleFolderId, data: jpegData)
 
             albumArtService.invalidateImage(for: previousCoverFileId)
             albumArtService.invalidateImage(for: coverItem.id)
@@ -488,26 +508,8 @@ struct AlbumMetadataEditorSheet: View {
         }
     }
 
-    private func resolveAdditDataFolder() async {
-        do {
-            if let item = try await driveService.findFile(named: "addit-data", inFolder: album.googleFolderId),
-               item.isFolder {
-                additDataFolderId = item.id
-                return
-            }
-        } catch {
-            // Best effort
-        }
-        additDataFolderId = nil
-    }
-
     private func resolveTracklistFileId() async {
         do {
-            if let folderId = additDataFolderId,
-               let item = try await driveService.findFile(named: ".addit-tracklist", inFolder: folderId) {
-                tracklistFileId = item.id
-                return
-            }
             if let item = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId) {
                 tracklistFileId = item.id
                 return
@@ -605,6 +607,11 @@ struct AlbumArtworkThumbnail: View {
                 albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
             }
     }
+}
+
+private struct CropItem: Identifiable {
+    let id = UUID()
+    let image: UIImage
 }
 
 private enum CoverUploadError: LocalizedError {

@@ -43,7 +43,7 @@ struct NowPlayingBar: View {
             .tint(themeService.accentColor)
             .frame(height: 16)
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 8)
 
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 6)
@@ -98,7 +98,9 @@ struct NowPlayingBar: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .background(.ultraThinMaterial)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
         .onTapGesture {
             if !isScrubbing {
                 showFullPlayer = true

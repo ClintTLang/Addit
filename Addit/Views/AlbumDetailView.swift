@@ -14,7 +14,6 @@ struct AlbumDetailView: View {
     @State private var tracklistFileId: String?
     @State private var isSavingOrder = false
     @State private var editMode: EditMode = .inactive
-    @State private var addiDataFolderId: String?
     @State private var artistFileId: String?
     @State private var isEditingArtist = false
     @State private var editedArtistName = ""
@@ -218,15 +217,13 @@ struct AlbumDetailView: View {
         guard let data = content.data(using: .utf8) else { return }
 
         do {
-            let folderId = addiDataFolderId ?? album.googleFolderId
-
             if let existingId = tracklistFileId {
                 try await driveService.updateFileData(fileId: existingId, data: data, mimeType: "text/plain")
             } else {
                 let item = try await driveService.createFile(
                     name: ".addit-tracklist",
                     mimeType: "text/plain",
-                    inFolder: folderId,
+                    inFolder: album.googleFolderId,
                     data: data
                 )
                 tracklistFileId = item.id
@@ -258,15 +255,13 @@ struct AlbumDetailView: View {
         guard let data = (newName ?? "").data(using: .utf8) else { return }
 
         do {
-            let folderId = addiDataFolderId ?? album.googleFolderId
-
             if let existingId = artistFileId {
                 try await driveService.updateFileData(fileId: existingId, data: data, mimeType: "text/plain")
             } else {
                 let item = try await driveService.createFile(
                     name: ".addit-artist",
                     mimeType: "text/plain",
-                    inFolder: folderId,
+                    inFolder: album.googleFolderId,
                     data: data
                 )
                 artistFileId = item.id
@@ -357,21 +352,6 @@ struct AlbumDetailView: View {
         }
     }
 
-    // MARK: - addit-data Folder
-
-    private func resolveAdditDataFolder() async {
-        do {
-            if let item = try await driveService.findFile(named: "addit-data", inFolder: album.googleFolderId),
-               item.isFolder {
-                addiDataFolderId = item.id
-                return
-            }
-        } catch {
-            // Best effort
-        }
-        addiDataFolderId = nil
-    }
-
     // MARK: - Sync
 
     private func syncFromDrive() async {
@@ -420,9 +400,6 @@ struct AlbumDetailView: View {
                 }
             }
 
-            // Resolve addit-data folder for metadata lookups
-            await resolveAdditDataFolder()
-
             // Apply tracklist ordering
             await applyTrackOrdering(driveFiles: driveFiles)
 
@@ -441,17 +418,7 @@ struct AlbumDetailView: View {
 
     private func applyTrackOrdering(driveFiles: [DriveItem]) async {
         do {
-            var tracklistItem: DriveItem?
-
-            // Check addit-data/ first
-            if let folderId = addiDataFolderId {
-                tracklistItem = try await driveService.findFile(named: ".addit-tracklist", inFolder: folderId)
-            }
-
-            // Fall back to root for backward compatibility
-            if tracklistItem == nil {
-                tracklistItem = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId)
-            }
+            let tracklistItem = try await driveService.findFile(named: ".addit-tracklist", inFolder: album.googleFolderId)
 
             if let tracklistItem {
                 tracklistFileId = tracklistItem.id
@@ -496,17 +463,7 @@ struct AlbumDetailView: View {
 
     private func syncArtistName() async {
         do {
-            var artistItem: DriveItem?
-
-            // Check addit-data/ first
-            if let folderId = addiDataFolderId {
-                artistItem = try await driveService.findFile(named: ".addit-artist", inFolder: folderId)
-            }
-
-            // Fall back to root
-            if artistItem == nil {
-                artistItem = try await driveService.findFile(named: ".addit-artist", inFolder: album.googleFolderId)
-            }
+            let artistItem = try await driveService.findFile(named: ".addit-artist", inFolder: album.googleFolderId)
 
             if let artistItem {
                 artistFileId = artistItem.id
@@ -525,11 +482,7 @@ struct AlbumDetailView: View {
 
     private func syncCoverArtMetadata() async {
         do {
-            // Only look for cover.* in addit-data/ subfolder
-            var coverItem: DriveItem?
-            if let folderId = addiDataFolderId {
-                coverItem = try await driveService.findCoverImage(inFolder: folderId)
-            }
+            let coverItem = try await driveService.findCoverImage(inFolder: album.googleFolderId)
 
             if let coverItem {
                 album.coverFileId = coverItem.id
