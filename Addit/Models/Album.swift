@@ -15,6 +15,7 @@ final class Album {
     var canEdit: Bool
     var isFolderOwner: Bool = false
     var displayOrder: Int = 0
+    var cachedTracklist: [String] = []
 
     @Relationship(deleteRule: .cascade, inverse: \Track.album)
     var tracks: [Track] = []

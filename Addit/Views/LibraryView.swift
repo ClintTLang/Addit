@@ -215,7 +215,7 @@ struct AlbumMetadataEditorSheet: View {
     @State private var coverUploadErrorMessage: String?
     @State private var coverImage: UIImage?
     @State private var imageToCrop: CropItem?
-    @State private var reorderedTracks: [Track] = []
+    @State private var reorderedItems: [TracklistItem] = []
     @State private var editedTrackNames: [String: String] = [:]
     @State private var additDataFileId: String?
     @State private var additDataOwnedByMe: Bool = true
@@ -308,34 +308,66 @@ struct AlbumMetadataEditorSheet: View {
                     }
 
                     // Arrange tracklist
-                    if !reorderedTracks.isEmpty {
+                    if !reorderedItems.isEmpty {
+                        // Add disc marker button
+                        HStack {
+                            Button {
+                                addDiscMarker()
+                            } label: {
+                                Label("Add disc marker", systemImage: "plus")
+                                    .font(.subheadline)
+                            }
+                            .disabled(reorderedItems.filter(\.isDiscMarker).count >= 100)
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+
                         VStack(alignment: .leading, spacing: 0) {
                             List {
-                                ForEach(reorderedTracks) { track in
-                                    HStack(spacing: 6) {
-                                        TextField(
-                                            track.displayName,
-                                            text: Binding(
-                                                get: { editedTrackNames[track.googleFileId] ?? track.displayName },
-                                                set: { editedTrackNames[track.googleFileId] = $0 }
+                                ForEach(Array(reorderedItems.enumerated()), id: \.element.id) { index, item in
+                                    switch item {
+                                    case .track(let track):
+                                        HStack(spacing: 6) {
+                                            TextField(
+                                                track.displayName,
+                                                text: Binding(
+                                                    get: { editedTrackNames[track.googleFileId] ?? track.displayName },
+                                                    set: { editedTrackNames[track.googleFileId] = $0 }
+                                                )
                                             )
-                                        )
-                                        .font(.body)
-                                        .lineLimit(1)
-                                        .focused($focusedField, equals: .track(track.googleFileId))
+                                            .font(.body)
+                                            .lineLimit(1)
+                                            .focused($focusedField, equals: .track(track.googleFileId))
 
-                                        Image(systemName: "pencil")
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
+                                            Image(systemName: "pencil")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    case .discMarker:
+                                        let discNumber = reorderedItems[0...index].filter(\.isDiscMarker).count
+                                        HStack {
+                                            Text("Disc \(discNumber)")
+                                                .font(.subheadline.bold())
+                                                .foregroundStyle(.secondary)
+                                            Spacer()
+                                            Button {
+                                                reorderedItems.remove(at: index)
+                                            } label: {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .foregroundStyle(.tertiary)
+                                                    .font(.body)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
                                     }
                                 }
                                 .onMove { source, destination in
-                                    reorderedTracks.move(fromOffsets: source, toOffset: destination)
+                                    reorderedItems.move(fromOffsets: source, toOffset: destination)
                                 }
                             }
                             .listStyle(.plain)
                             .environment(\.editMode, .constant(.active))
-                            .frame(height: CGFloat(reorderedTracks.count) * 44)
+                            .frame(height: CGFloat(reorderedItems.count) * 44)
                         }
                         .padding(.horizontal)
                     }
@@ -364,11 +396,11 @@ struct AlbumMetadataEditorSheet: View {
             .task {
                 editedTitle = album.name
                 editedArtist = album.artistName ?? ""
-                reorderedTracks = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
                 let resolution = await albumArtService.resolveAlbumArt(for: album)
                 coverImage = resolution.image
                 await resolveFolderOwnership()
                 await resolveAdditDataFileId()
+                await loadTracklistItems()
             }
             .onChange(of: selectedCoverPhoto) { _, newValue in
                 guard let newValue else { return }
@@ -422,8 +454,9 @@ struct AlbumMetadataEditorSheet: View {
         // Snapshot current state for rollback
         let previousName = album.name
         let previousArtist = album.artistName
-        let previousTrackNames = Dictionary(uniqueKeysWithValues: reorderedTracks.map { ($0.googleFileId, $0.name) })
-        let previousTrackNumbers = Dictionary(uniqueKeysWithValues: reorderedTracks.map { ($0.googleFileId, $0.trackNumber) })
+        let allTracks = reorderedItems.compactMap(\.asTrack)
+        let previousTrackNames = Dictionary(uniqueKeysWithValues: allTracks.map { ($0.googleFileId, $0.name) })
+        let previousTrackNumbers = Dictionary(uniqueKeysWithValues: allTracks.map { ($0.googleFileId, $0.trackNumber) })
 
         album.name = trimmedTitle
         album.artistName = newArtist
@@ -444,12 +477,14 @@ struct AlbumMetadataEditorSheet: View {
             // Revert all local changes on failure
             album.name = previousName
             album.artistName = previousArtist
-            for track in reorderedTracks {
-                if let oldName = previousTrackNames[track.googleFileId] {
-                    track.name = oldName
-                }
-                if let oldNumber = previousTrackNumbers[track.googleFileId] {
-                    track.trackNumber = oldNumber
+            for item in reorderedItems {
+                if case .track(let track) = item {
+                    if let oldName = previousTrackNames[track.googleFileId] {
+                        track.name = oldName
+                    }
+                    if let oldNumber = previousTrackNumbers[track.googleFileId] {
+                        track.trackNumber = oldNumber
+                    }
                 }
             }
             try? modelContext.save()
@@ -502,8 +537,20 @@ struct AlbumMetadataEditorSheet: View {
     }
 
     private func saveAdditData(inFolder folderId: String, artist: String?) async throws {
+        // Build interleaved tracklist with disc markers
+        var discNumber = 0
+        let tracklist: [String] = reorderedItems.map { item in
+            switch item {
+            case .track(let track):
+                return track.name
+            case .discMarker:
+                discNumber += 1
+                return "\(AdditMetadata.discMarkerPrefix)Disc \(discNumber)"
+            }
+        }
+
         let metadata = AdditMetadata(
-            tracklist: reorderedTracks.map(\.name),
+            tracklist: tracklist,
             artist: artist
         )
         let data = try JSONEncoder().encode(metadata)
@@ -534,10 +581,67 @@ struct AlbumMetadataEditorSheet: View {
             additDataOwnedByMe = true
         }
 
-        for (index, track) in reorderedTracks.enumerated() {
-            track.trackNumber = index + 1
+        // Assign track numbers (skip disc markers)
+        var trackNumber = 1
+        for item in reorderedItems {
+            if case .track(let track) = item {
+                track.trackNumber = trackNumber
+                trackNumber += 1
+            }
         }
         try? modelContext.save()
+    }
+
+    private func addDiscMarker() {
+        let existingDiscCount = reorderedItems.filter(\.isDiscMarker).count
+        guard existingDiscCount < 100 else { return }
+
+        let newMarker = TracklistItem.discMarker(id: UUID(), label: "")
+
+        if existingDiscCount == 0 {
+            reorderedItems.insert(newMarker, at: 0)
+        } else if let lastDiscIndex = reorderedItems.lastIndex(where: \.isDiscMarker) {
+            reorderedItems.insert(newMarker, at: lastDiscIndex + 1)
+        }
+    }
+
+    private func loadTracklistItems() async {
+        let sortedTracks = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
+
+        // Try to load existing addit-data to get disc markers
+        if let fileId = additDataFileId {
+            do {
+                let data = try await driveService.downloadFileData(fileId: fileId)
+                if let metadata = try? JSONDecoder().decode(AdditMetadata.self, from: data),
+                   let tracklist = metadata.tracklist {
+                    var items: [TracklistItem] = []
+                    var matchedIds = Set<String>()
+
+                    for entry in tracklist {
+                        if entry.hasPrefix(AdditMetadata.discMarkerPrefix) {
+                            let label = String(entry.dropFirst(AdditMetadata.discMarkerPrefix.count))
+                            items.append(.discMarker(id: UUID(), label: label))
+                        } else if let track = sortedTracks.first(where: { $0.name == entry && !matchedIds.contains($0.googleFileId) }) {
+                            items.append(.track(track))
+                            matchedIds.insert(track.googleFileId)
+                        }
+                    }
+
+                    // Append any tracks not in the tracklist
+                    for track in sortedTracks where !matchedIds.contains(track.googleFileId) {
+                        items.append(.track(track))
+                    }
+
+                    reorderedItems = items
+                    return
+                }
+            } catch {
+                // Fall through to default
+            }
+        }
+
+        // Default: just tracks, no disc markers
+        reorderedItems = sortedTracks.map { .track($0) }
     }
 
     private func resolveFolderOwnership() async {
@@ -567,7 +671,8 @@ struct AlbumMetadataEditorSheet: View {
     }
 
     private func renameChangedTracks() async throws {
-        for track in reorderedTracks {
+        for item in reorderedItems {
+            guard case .track(let track) = item else { continue }
             guard let editedName = editedTrackNames[track.googleFileId] else { continue }
             let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }

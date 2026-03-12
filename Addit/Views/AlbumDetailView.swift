@@ -13,11 +13,16 @@ struct AlbumDetailView: View {
     @State private var showEditSheet = false
     @State private var albumImage: UIImage?
     @State private var queuedTrackId: String?
+    @State private var displayItems: [TracklistItem] = []
 
     private let coverSize: CGFloat = 200
 
     private var sortedTracks: [Track] {
         album.tracks.sorted { $0.trackNumber < $1.trackNumber }
+    }
+
+    private var playableTracks: [Track] {
+        displayItems.compactMap(\.asTrack)
     }
 
     private var artworkTaskID: String? {
@@ -98,47 +103,55 @@ struct AlbumDetailView: View {
                 }
 
                 Section {
-                    ForEach(Array(sortedTracks.enumerated()), id: \.element.persistentModelID) { index, track in
-                        TrackRow(
-                            track: track,
-                            number: index + 1,
-                            isCurrentTrack: playerService.currentTrack?.googleFileId == track.googleFileId,
-                            isPlaying: playerService.currentTrack?.googleFileId == track.googleFileId && playerService.isPlaying
-                        )
-                        .listRowBackground(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            playerService.playTrack(track, inQueue: sortedTracks)
-                        }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                playerService.addToQueue(track)
-                                queuedTrackId = track.googleFileId
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                Task {
-                                    try? await Task.sleep(for: .seconds(1.5))
-                                    if queuedTrackId == track.googleFileId {
-                                        queuedTrackId = nil
+                    ForEach(Array(displayItems.enumerated()), id: \.element.id) { index, item in
+                        switch item {
+                        case .track(let track):
+                            let trackNumber = displayItems[0...index].filter({ !$0.isDiscMarker }).count
+                            TrackRow(
+                                track: track,
+                                number: trackNumber,
+                                isCurrentTrack: playerService.currentTrack?.googleFileId == track.googleFileId,
+                                isPlaying: playerService.currentTrack?.googleFileId == track.googleFileId && playerService.isPlaying
+                            )
+                            .listRowBackground(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                playerService.playTrack(track, inQueue: playableTracks)
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    playerService.addToQueue(track)
+                                    queuedTrackId = track.googleFileId
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    Task {
+                                        try? await Task.sleep(for: .seconds(1.5))
+                                        if queuedTrackId == track.googleFileId {
+                                            queuedTrackId = nil
+                                        }
                                     }
+                                } label: {
+                                    Label("Queue", systemImage: "text.line.last.and.arrowtriangle.forward")
                                 }
-                            } label: {
-                                Label("Queue", systemImage: "text.line.last.and.arrowtriangle.forward")
+                                .tint(themeService.accentColor)
                             }
-                            .tint(themeService.accentColor)
-                        }
-                        .overlay(alignment: .trailing) {
-                            if queuedTrackId == track.googleFileId {
-                                Text("Queued")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(themeService.accentColor, in: Capsule())
-                                    .transition(.opacity.combined(with: .scale))
-                                    .padding(.trailing, 8)
+                            .overlay(alignment: .trailing) {
+                                if queuedTrackId == track.googleFileId {
+                                    Text("Queued")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(themeService.accentColor, in: Capsule())
+                                        .transition(.opacity.combined(with: .scale))
+                                        .padding(.trailing, 8)
+                                }
                             }
+                            .animation(.easeInOut(duration: 0.2), value: queuedTrackId)
+                        case .discMarker(_, let label):
+                            DiscMarkerRow(label: label)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                         }
-                        .animation(.easeInOut(duration: 0.2), value: queuedTrackId)
                     }
                 }
 
@@ -162,7 +175,9 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showEditSheet) {
+        .sheet(isPresented: $showEditSheet, onDismiss: {
+            Task { await syncFromDrive() }
+        }) {
             AlbumMetadataEditorSheet(album: album)
         }
         .refreshable {
@@ -189,6 +204,15 @@ struct AlbumDetailView: View {
         isSyncing = true
         syncError = nil
         defer { isSyncing = false }
+
+        // Show existing tracks (with cached disc markers) immediately while syncing
+        if displayItems.isEmpty && !album.tracks.isEmpty {
+            if !album.cachedTracklist.isEmpty {
+                buildDisplayItems(from: AdditMetadata(tracklist: album.cachedTracklist))
+            } else {
+                displayItems = sortedTracks.map { .track($0) }
+            }
+        }
 
         do {
             // Refresh folder name and permissions from Drive
@@ -286,18 +310,19 @@ struct AlbumDetailView: View {
             }
         }
 
-        // Apply track ordering
+        // Apply track ordering (skip disc markers)
         if let orderedNames = metadata?.tracklist, !orderedNames.isEmpty {
             var trackNumber = 1
 
             for name in orderedNames {
+                if name.hasPrefix(AdditMetadata.discMarkerPrefix) { continue }
                 if let track = album.tracks.first(where: { $0.name == name }) {
                     track.trackNumber = trackNumber
                     trackNumber += 1
                 }
             }
 
-            let listedNames = Set(orderedNames)
+            let listedNames = Set(orderedNames.filter { !$0.hasPrefix(AdditMetadata.discMarkerPrefix) })
             let unlistedTracks = album.tracks
                 .filter { !listedNames.contains($0.name) }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -314,6 +339,42 @@ struct AlbumDetailView: View {
                 }
             }
         }
+
+        // Build display items with disc markers interleaved
+        buildDisplayItems(from: metadata)
+
+        // Cache tracklist for instant display on next visit
+        album.cachedTracklist = metadata?.tracklist ?? []
+    }
+
+    private func buildDisplayItems(from metadata: AdditMetadata?) {
+        guard let orderedNames = metadata?.tracklist, !orderedNames.isEmpty else {
+            displayItems = sortedTracks.map { .track($0) }
+            return
+        }
+
+        var items: [TracklistItem] = []
+        var matchedIds = Set<String>()
+
+        for name in orderedNames {
+            if name.hasPrefix(AdditMetadata.discMarkerPrefix) {
+                let label = String(name.dropFirst(AdditMetadata.discMarkerPrefix.count))
+                items.append(.discMarker(id: UUID(), label: label))
+            } else if let track = album.tracks.first(where: { $0.name == name && !matchedIds.contains($0.googleFileId) }) {
+                items.append(.track(track))
+                matchedIds.insert(track.googleFileId)
+            }
+        }
+
+        // Append any tracks not in the tracklist
+        let unmatched = album.tracks
+            .filter { !matchedIds.contains($0.googleFileId) }
+            .sorted { $0.trackNumber < $1.trackNumber }
+        for track in unmatched {
+            items.append(.track(track))
+        }
+
+        displayItems = items
     }
 
     private func syncCoverArtMetadata() async {
@@ -395,5 +456,20 @@ struct TrackRow: View {
     private func formatFileSize(_ bytes: Int64) -> String {
         let mb = Double(bytes) / 1_048_576.0
         return String(format: "%.1f MB", mb)
+    }
+}
+
+struct DiscMarkerRow: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack { Divider() }
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            VStack { Divider() }
+        }
+        .padding(.vertical, 4)
     }
 }
