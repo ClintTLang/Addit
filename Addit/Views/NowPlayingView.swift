@@ -10,6 +10,7 @@ struct NowPlayingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var seekValue: TimeInterval = 0
     @State private var albumImage: UIImage?
+    @State private var showQueueSheet = false
 
     private var artworkTaskID: String? {
         guard let album = playerService.currentTrack?.album else { return nil }
@@ -161,15 +162,33 @@ struct NowPlayingView: View {
 
             Spacer()
 
-            // Queue info
+            // Queue button
             if !playerService.queue.isEmpty {
-                Text("Track \(playerService.currentIndex + 1) of \(playerService.queue.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 16)
+                Button {
+                    showQueueSheet = true
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.title3)
+                        .foregroundStyle(.primary.opacity(0.6))
+                        .overlay(alignment: .topTrailing) {
+                            if !playerService.userQueue.isEmpty {
+                                Text("\(playerService.userQueue.count)")
+                                    .font(.system(size: 10).bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(themeService.accentColor, in: Capsule())
+                                    .offset(x: 10, y: -8)
+                            }
+                        }
+                }
+                .padding(.bottom, 16)
             }
         }
         .padding()
+        .sheet(isPresented: $showQueueSheet) {
+            QueueView()
+        }
         .task(id: artworkTaskID) {
             guard let album = playerService.currentTrack?.album else {
                 albumImage = nil

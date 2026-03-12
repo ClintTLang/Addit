@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import SwiftUI
 
 enum RepeatMode {
     case off, all, one
@@ -19,6 +20,7 @@ final class AudioPlayerService {
     var repeatMode: RepeatMode = .off
     var isLoading: Bool = false
     var isSeeking: Bool = false
+    var userQueue: [Track] = []
 
     var currentTrack: Track? {
         guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return nil }
@@ -41,6 +43,7 @@ final class AudioPlayerService {
     // MARK: - Playback Controls
 
     func playAlbum(_ album: Album, startingAt index: Int = 0, shuffled: Bool = false) {
+        userQueue.removeAll()
         let sorted = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
         originalQueue = sorted
 
@@ -64,6 +67,7 @@ final class AudioPlayerService {
     }
 
     func playTrack(_ track: Track, inQueue tracks: [Track]) {
+        userQueue.removeAll()
         originalQueue = tracks
         queue = tracks
         currentIndex = tracks.firstIndex(where: { $0.googleFileId == track.googleFileId }) ?? 0
@@ -95,6 +99,15 @@ final class AudioPlayerService {
         if repeatMode == .one {
             seek(to: 0)
             play()
+            return
+        }
+
+        // Play from user queue first
+        if !userQueue.isEmpty {
+            let nextTrack = userQueue.removeFirst()
+            queue.insert(nextTrack, at: currentIndex + 1)
+            currentIndex += 1
+            Task { await loadAndPlay() }
             return
         }
 
@@ -166,6 +179,21 @@ final class AudioPlayerService {
         }
     }
 
+    // MARK: - Queue Management
+
+    func addToQueue(_ track: Track) {
+        userQueue.append(track)
+    }
+
+    func removeFromUserQueue(at index: Int) {
+        guard userQueue.indices.contains(index) else { return }
+        userQueue.remove(at: index)
+    }
+
+    func moveUserQueueTrack(from source: IndexSet, to destination: Int) {
+        userQueue.move(fromOffsets: source, toOffset: destination)
+    }
+
     // MARK: - Private
 
     private func loadAndPlay() async {
@@ -203,10 +231,17 @@ final class AudioPlayerService {
         prefetchTask?.cancel()
         prefetchTask = Task {
             guard let cacheService else { return }
-            let indicesToPrefetch = upcomingIndices(count: 2)
-            for index in indicesToPrefetch {
+
+            // Prefetch user queue tracks first, then album queue
+            var tracksToPrefetch: [Track] = Array(userQueue.prefix(2))
+            if tracksToPrefetch.count < 2 {
+                let remaining = 2 - tracksToPrefetch.count
+                let indices = upcomingIndices(count: remaining)
+                tracksToPrefetch.append(contentsOf: indices.map { queue[$0] })
+            }
+
+            for track in tracksToPrefetch {
                 guard !Task.isCancelled else { return }
-                let track = queue[index]
                 do {
                     _ = try await cacheService.cacheTrack(track)
                 } catch {

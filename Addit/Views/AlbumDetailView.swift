@@ -12,6 +12,7 @@ struct AlbumDetailView: View {
     @State private var syncError: String?
     @State private var showEditSheet = false
     @State private var albumImage: UIImage?
+    @State private var queuedTrackId: String?
 
     private let coverSize: CGFloat = 200
 
@@ -109,6 +110,35 @@ struct AlbumDetailView: View {
                         .onTapGesture {
                             playerService.playTrack(track, inQueue: sortedTracks)
                         }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                playerService.addToQueue(track)
+                                queuedTrackId = track.googleFileId
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                Task {
+                                    try? await Task.sleep(for: .seconds(1.5))
+                                    if queuedTrackId == track.googleFileId {
+                                        queuedTrackId = nil
+                                    }
+                                }
+                            } label: {
+                                Label("Queue", systemImage: "text.line.last.and.arrowtriangle.forward")
+                            }
+                            .tint(themeService.accentColor)
+                        }
+                        .overlay(alignment: .trailing) {
+                            if queuedTrackId == track.googleFileId {
+                                Text("Queued")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(themeService.accentColor, in: Capsule())
+                                    .transition(.opacity.combined(with: .scale))
+                                    .padding(.trailing, 8)
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: queuedTrackId)
                     }
                 }
 
