@@ -87,17 +87,12 @@ struct NowPlayingBar: View {
                             .font(.title2)
                     }
                 }
-
-                Button {
-                    playerService.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .contentShape(Rectangle())
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
         .onTapGesture {
