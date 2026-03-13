@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
@@ -220,6 +221,10 @@ struct AlbumMetadataEditorSheet: View {
     @State private var additDataFileId: String?
     @State private var additDataOwnedByMe: Bool = true
     @State private var isSavingOrder = false
+    @State private var trackToDelete: Track?
+    @State private var showAddTrackSheet = false
+    @State private var showDocumentPicker = false
+    @State private var isUploadingTracks = false
     @FocusState private var focusedField: EditField?
 
     private enum EditField: Hashable {
@@ -309,7 +314,6 @@ struct AlbumMetadataEditorSheet: View {
 
                     // Arrange tracklist
                     if !reorderedItems.isEmpty {
-                        // Add disc marker button
                         HStack {
                             Button {
                                 addDiscMarker()
@@ -318,46 +322,85 @@ struct AlbumMetadataEditorSheet: View {
                                     .font(.subheadline)
                             }
                             .disabled(reorderedItems.filter(\.isDiscMarker).count >= 100)
+
                             Spacer()
+
+                            if album.canEdit {
+                                Menu {
+                                    Button {
+                                        showAddTrackSheet = true
+                                    } label: {
+                                        Label("From Google Drive", systemImage: "cloud")
+                                    }
+                                    Button {
+                                        showDocumentPicker = true
+                                    } label: {
+                                        Label("From iPhone", systemImage: "iphone")
+                                    }
+                                } label: {
+                                    Label("Add tracks", systemImage: "plus.circle")
+                                        .font(.subheadline)
+                                }
+                                .disabled(isUploadingTracks)
+                            }
                         }
                         .padding(.horizontal)
 
                         VStack(alignment: .leading, spacing: 0) {
                             List {
                                 ForEach(Array(reorderedItems.enumerated()), id: \.element.id) { index, item in
-                                    switch item {
-                                    case .track(let track):
-                                        HStack(spacing: 6) {
-                                            TextField(
-                                                track.displayName,
-                                                text: Binding(
-                                                    get: { editedTrackNames[track.googleFileId] ?? track.displayName },
-                                                    set: { editedTrackNames[track.googleFileId] = $0 }
-                                                )
-                                            )
-                                            .font(.body)
-                                            .lineLimit(1)
-                                            .focused($focusedField, equals: .track(track.googleFileId))
-
-                                            Image(systemName: "pencil")
-                                                .font(.caption2)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    case .discMarker:
-                                        let discNumber = reorderedItems[0...index].filter(\.isDiscMarker).count
-                                        HStack {
-                                            Text("Disc \(discNumber)")
-                                                .font(.subheadline.bold())
-                                                .foregroundStyle(.secondary)
-                                            Spacer()
-                                            Button {
-                                                reorderedItems.remove(at: index)
-                                            } label: {
-                                                Image(systemName: "xmark.circle.fill")
-                                                    .foregroundStyle(.tertiary)
+                                    Group {
+                                        switch item {
+                                        case .track(let track):
+                                            HStack(spacing: 6) {
+                                                HStack(spacing: 4) {
+                                                    TextField(
+                                                        track.displayName,
+                                                        text: Binding(
+                                                            get: { editedTrackNames[track.googleFileId] ?? track.displayName },
+                                                            set: { editedTrackNames[track.googleFileId] = $0 }
+                                                        )
+                                                    )
                                                     .font(.body)
+                                                    .lineLimit(1)
+                                                    .focused($focusedField, equals: .track(track.googleFileId))
+                                                    .fixedSize(horizontal: false, vertical: true)
+
+                                                    Image(systemName: "pencil")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.tertiary)
+                                                }
+
+                                                Spacer()
+
+                                                if album.canEdit {
+                                                    Button {
+                                                        trackToDelete = track
+                                                    } label: {
+                                                        Image(systemName: "trash")
+                                                            .font(.caption)
+                                                            .foregroundStyle(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    .padding(.leading, 8)
+                                                }
                                             }
-                                            .buttonStyle(.plain)
+                                        case .discMarker:
+                                            let discNumber = reorderedItems[0...index].filter(\.isDiscMarker).count
+                                            HStack {
+                                                Text("Disc \(discNumber)")
+                                                    .font(.subheadline.bold())
+                                                    .foregroundStyle(.secondary)
+                                                Spacer()
+                                                Button {
+                                                    reorderedItems.remove(at: index)
+                                                } label: {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .foregroundStyle(.tertiary)
+                                                        .font(.body)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
                                         }
                                     }
                                 }
@@ -426,6 +469,19 @@ struct AlbumMetadataEditorSheet: View {
             } message: {
                 Text(coverUploadErrorMessage ?? "")
             }
+            .alert("Delete Track?", isPresented: Binding(
+                get: { trackToDelete != nil },
+                set: { if !$0 { trackToDelete = nil } }
+            )) {
+                Button("Delete", role: .destructive) {
+                    if let track = trackToDelete {
+                        Task { await deleteTrack(track) }
+                    }
+                }
+                Button("Cancel", role: .cancel) { trackToDelete = nil }
+            } message: {
+                Text("This will delete \"\(trackToDelete?.name ?? "")\" from \"\(album.name)\" in Google Drive.")
+            }
             .fullScreenCover(item: $imageToCrop) { item in
                 ImageCropperView(
                     image: item.image,
@@ -437,6 +493,29 @@ struct AlbumMetadataEditorSheet: View {
                         imageToCrop = nil
                     }
                 )
+            }
+            .fileImporter(
+                isPresented: $showDocumentPicker,
+                allowedContentTypes: [.audio],
+                allowsMultipleSelection: true
+            ) { result in
+                Task { await handlePickedFiles(result) }
+            }
+            .sheet(isPresented: $showAddTrackSheet) {
+                DriveAudioPickerView(targetFolderId: album.googleFolderId) { files in
+                    Task { await handleDriveFilesAdded(files) }
+                }
+            }
+            .overlay {
+                if isUploadingTracks {
+                    ZStack {
+                        Color.black.opacity(0.3)
+                        ProgressView("Adding tracks...")
+                            .padding()
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .ignoresSafeArea()
+                }
             }
         }
     }
@@ -602,6 +681,104 @@ struct AlbumMetadataEditorSheet: View {
             reorderedItems.insert(newMarker, at: 0)
         } else if let lastDiscIndex = reorderedItems.lastIndex(where: \.isDiscMarker) {
             reorderedItems.insert(newMarker, at: lastDiscIndex + 1)
+        }
+    }
+
+    private func deleteTrack(_ track: Track) async {
+        do {
+            try await driveService.deleteFile(fileId: track.googleFileId)
+            reorderedItems.removeAll { $0.id == track.googleFileId }
+            editedTrackNames.removeValue(forKey: track.googleFileId)
+            modelContext.delete(track)
+            album.trackCount = max(0, album.trackCount - 1)
+            try? modelContext.save()
+        } catch {
+            errorMessage = "Failed to delete: \(error.localizedDescription)"
+        }
+        trackToDelete = nil
+    }
+
+    private func handlePickedFiles(_ result: Result<[URL], Error>) async {
+        guard case .success(let urls) = result, !urls.isEmpty else { return }
+
+        isUploadingTracks = true
+        defer { isUploadingTracks = false }
+
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            do {
+                let data = try Data(contentsOf: url)
+                let fileName = url.lastPathComponent
+                let mimeType = mimeTypeForExtension(url.pathExtension)
+
+                let driveItem = try await driveService.createFile(
+                    name: fileName,
+                    mimeType: mimeType,
+                    inFolder: album.googleFolderId,
+                    data: data
+                )
+
+                let track = Track(
+                    googleFileId: driveItem.id,
+                    name: driveItem.name,
+                    album: album,
+                    mimeType: driveItem.mimeType,
+                    fileSize: driveItem.fileSizeBytes,
+                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1
+                )
+                modelContext.insert(track)
+                reorderedItems.append(.track(track))
+                album.trackCount += 1
+            } catch {
+                errorMessage = "Upload failed: \(error.localizedDescription)"
+            }
+        }
+        try? modelContext.save()
+    }
+
+    private func handleDriveFilesAdded(_ files: [DriveItem]) async {
+        isUploadingTracks = true
+        defer { isUploadingTracks = false }
+
+        for file in files {
+            do {
+                let copiedItem = try await driveService.copyFile(
+                    fileId: file.id,
+                    toFolder: album.googleFolderId
+                )
+
+                let track = Track(
+                    googleFileId: copiedItem.id,
+                    name: copiedItem.name,
+                    album: album,
+                    mimeType: copiedItem.mimeType,
+                    fileSize: copiedItem.fileSizeBytes,
+                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1
+                )
+                modelContext.insert(track)
+                reorderedItems.append(.track(track))
+                album.trackCount += 1
+            } catch {
+                errorMessage = "Copy failed: \(error.localizedDescription)"
+            }
+        }
+        try? modelContext.save()
+    }
+
+    private func mimeTypeForExtension(_ ext: String) -> String {
+        switch ext.lowercased() {
+        case "mp3": return "audio/mpeg"
+        case "m4a": return "audio/x-m4a"
+        case "mp4": return "audio/mp4"
+        case "aac": return "audio/aac"
+        case "flac": return "audio/flac"
+        case "wav": return "audio/wav"
+        case "aiff", "aif": return "audio/aiff"
+        case "ogg": return "audio/ogg"
+        case "alac": return "audio/alac"
+        default: return "audio/mpeg"
         }
     }
 

@@ -144,6 +144,41 @@ final class GoogleDriveService {
         try validateResponse(response)
     }
 
+    /// Permanently deletes a file from Google Drive (moves to trash).
+    func deleteFile(fileId: String) async throws {
+        let token = try await getToken()
+
+        var components = URLComponents(string: "\(baseURL)/files/\(fileId)")!
+        components.queryItems = [
+            URLQueryItem(name: "supportsAllDrives", value: "true")
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
+    /// Copies a file into a target folder, returning the new DriveItem.
+    func copyFile(fileId: String, toFolder folderId: String) async throws -> DriveItem {
+        let token = try await getToken()
+
+        let url = URL(string: "\(baseURL)/files/\(fileId)/copy?supportsAllDrives=true&fields=id,name,mimeType,size,parents,capabilities,ownedByMe,modifiedTime")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let metadata: [String: Any] = ["parents": [folderId]]
+        request.httpBody = try JSONSerialization.data(withJSONObject: metadata)
+
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(DriveItem.self, from: data)
+    }
+
     // MARK: - Folder Operations
 
     func createFolder(name: String, inParent parentId: String) async throws -> DriveItem {
