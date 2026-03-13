@@ -4,6 +4,7 @@ import GoogleSignIn
 @Observable
 final class GoogleAuthService {
     var isSignedIn = false
+    var isRestoringSession = true
     var userName: String?
     var userEmail: String?
 
@@ -17,6 +18,8 @@ final class GoogleAuthService {
     }
 
     func restorePreviousSignIn() async {
+        isRestoringSession = true
+        defer { isRestoringSession = false }
         do {
             let user = try await GIDSignIn.sharedInstance.restorePreviousSignIn()
             if user.grantedScopes?.contains(Constants.driveScope) == true {

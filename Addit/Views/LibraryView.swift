@@ -353,25 +353,20 @@ struct AlbumMetadataEditorSheet: View {
                                         switch item {
                                         case .track(let track):
                                             HStack(spacing: 6) {
-                                                HStack(spacing: 4) {
-                                                    TextField(
-                                                        track.displayName,
-                                                        text: Binding(
-                                                            get: { editedTrackNames[track.googleFileId] ?? track.displayName },
-                                                            set: { editedTrackNames[track.googleFileId] = $0 }
-                                                        )
+                                                TextField(
+                                                    track.displayName,
+                                                    text: Binding(
+                                                        get: { editedTrackNames[track.googleFileId] ?? track.displayName },
+                                                        set: { editedTrackNames[track.googleFileId] = $0 }
                                                     )
-                                                    .font(.body)
-                                                    .lineLimit(1)
-                                                    .focused($focusedField, equals: .track(track.googleFileId))
-                                                    .fixedSize(horizontal: false, vertical: true)
+                                                )
+                                                .font(.body)
+                                                .lineLimit(1)
+                                                .focused($focusedField, equals: .track(track.googleFileId))
 
-                                                    Image(systemName: "pencil")
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.tertiary)
-                                                }
-
-                                                Spacer()
+                                                Image(systemName: "pencil")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.tertiary)
 
                                                 if album.canEdit {
                                                     Button {
@@ -382,7 +377,6 @@ struct AlbumMetadataEditorSheet: View {
                                                             .foregroundStyle(.red)
                                                     }
                                                     .buttonStyle(.plain)
-                                                    .padding(.leading, 8)
                                                 }
                                             }
                                         case .discMarker:

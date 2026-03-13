@@ -8,7 +8,16 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if authService.isSignedIn {
+            if authService.isRestoringSession {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text("addit")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if authService.isSignedIn {
                 ZStack(alignment: .bottom) {
                     NavigationStack {
                         LibraryView()
