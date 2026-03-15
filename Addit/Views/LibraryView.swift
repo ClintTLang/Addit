@@ -17,6 +17,7 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var metadataEditorAlbum: Album?
     @State private var isArranging = false
+    @AppStorage("libraryViewMode") private var isListMode = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -57,6 +58,40 @@ struct LibraryView: View {
                     }
                 }
                 .environment(\.editMode, .constant(.active))
+            } else if isListMode {
+                List {
+                    ForEach(albums) { album in
+                        NavigationLink(value: album) {
+                            HStack(spacing: 12) {
+                                AlbumArtworkThumbnail(album: album, size: 48)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(album.name)
+                                        .font(.body.bold())
+                                        .lineLimit(1)
+                                    Text(album.artistName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? album.artistName! : "Unknown Artist")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .contextMenu {
+                            Button {
+                                metadataEditorAlbum = album
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            Button {
+                                isArranging = true
+                            } label: {
+                                Label("Arrange", systemImage: "arrow.up.arrow.down")
+                            }
+                            Button("Remove from Library", role: .destructive) {
+                                modelContext.delete(album)
+                            }
+                        }
+                    }
+                }
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
@@ -100,19 +135,26 @@ struct LibraryView: View {
                 }
             } else {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
+                    HStack(spacing: 16) {
                         Button {
-                            showAddAlbum = true
+                            withAnimation { isListMode.toggle() }
                         } label: {
-                            Label("Add Existing", systemImage: "folder.badge.plus")
+                            Image(systemName: isListMode ? "square.grid.2x2" : "list.bullet")
                         }
-                        Button {
-                            showCreateAlbum = true
+                        Menu {
+                            Button {
+                                showAddAlbum = true
+                            } label: {
+                                Label("Add Existing", systemImage: "folder.badge.plus")
+                            }
+                            Button {
+                                showCreateAlbum = true
+                            } label: {
+                                Label("Create New", systemImage: "plus.rectangle.on.folder")
+                            }
                         } label: {
-                            Label("Create New", systemImage: "plus.rectangle.on.folder")
+                            Image(systemName: "plus")
                         }
-                    } label: {
-                        Image(systemName: "plus")
                     }
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
