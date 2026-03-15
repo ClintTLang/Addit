@@ -49,6 +49,7 @@ struct AdditApp: App {
                     cacheService.driveService = driveService
                     albumArtService.driveService = driveService
                     playerService.cacheService = cacheService
+                    playerService.albumArtService = albumArtService
                     await authService.restorePreviousSignIn()
                 }
         }

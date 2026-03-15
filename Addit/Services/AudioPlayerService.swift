@@ -10,6 +10,7 @@ enum RepeatMode {
 @Observable
 final class AudioPlayerService {
     var cacheService: AudioCacheService?
+    var albumArtService: AlbumArtService?
 
     var queue: [Track] = []
     var currentIndex: Int = 0
@@ -357,6 +358,18 @@ final class AudioPlayerService {
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+        // Load album artwork asynchronously
+        if let coverFileId = currentTrack?.album?.coverFileId, let albumArtService {
+            Task {
+                if let image = await albumArtService.image(for: coverFileId) {
+                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    var updatedInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                    updatedInfo[MPMediaItemPropertyArtwork] = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = updatedInfo
+                }
+            }
+        }
     }
 
     private func updateNowPlayingPlaybackInfo() {
