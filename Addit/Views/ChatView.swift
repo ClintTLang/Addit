@@ -106,8 +106,9 @@ struct ChatView: View {
                 .environment(authService)
         }
         .task {
-            await loadMessages()
-            await loadMembers()
+            async let msgs: () = loadMessages()
+            async let mbrs: () = loadMembers()
+            _ = await (msgs, mbrs)
         }
     }
 
@@ -184,10 +185,11 @@ struct ChatView: View {
                         .padding(.vertical, 8)
                     }
 
-                    ForEach(Array(sortedMessages.enumerated()), id: \.element.id) { index, message in
+                    let sorted = sortedMessages
+                    ForEach(Array(sorted.enumerated()), id: \.element.id) { index, message in
                         let isMe = message.author.me
-                        let previousAuthor = index > 0 ? sortedMessages[index - 1].author.displayName : nil
-                        let nextAuthor = index < sortedMessages.count - 1 ? sortedMessages[index + 1].author.displayName : nil
+                        let previousAuthor = index > 0 ? sorted[index - 1].author.displayName : nil
+                        let nextAuthor = index < sorted.count - 1 ? sorted[index + 1].author.displayName : nil
                         let showName = !isMe && message.author.displayName != previousAuthor
                         let showAvatar = !isMe && message.author.displayName != nextAuthor
                         ChatBubble(message: message, isMe: isMe, showName: showName, showAvatar: showAvatar, showTimestamp: showTimestamps)
@@ -202,14 +204,15 @@ struct ChatView: View {
             .clipped()
             .ignoresSafeArea(.keyboard)
             .scrollDismissesKeyboard(.interactively)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 15)
+            .gesture(
+                DragGesture(minimumDistance: 30)
                     .onChanged { value in
                         let horizontal = value.translation.width
-                        if horizontal < 0 {
-                            withAnimation(.interactiveSpring) {
-                                timestampDragOffset = max(horizontal, -70)
-                            }
+                        // Only activate on predominantly horizontal left swipes
+                        guard horizontal < 0,
+                              abs(horizontal) > abs(value.translation.height) else { return }
+                        withAnimation(.interactiveSpring) {
+                            timestampDragOffset = max(horizontal, -70)
                         }
                     }
                     .onEnded { _ in
@@ -218,7 +221,6 @@ struct ChatView: View {
                         withAnimation(.spring(duration: 0.3)) {
                             timestampDragOffset = 0
                         }
-                        // Auto-hide after releasing — give time for the spring to settle
                         Task {
                             try? await Task.sleep(for: .seconds(0.3))
                             if timestampGeneration == gen {
