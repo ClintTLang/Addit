@@ -90,8 +90,10 @@ struct LibraryView: View {
                                 modelContext.delete(album)
                             }
                         }
+                        .listRowBackground(Color.clear)
                     }
                 }
+                .listStyle(.plain)
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
