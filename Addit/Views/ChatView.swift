@@ -53,6 +53,18 @@ struct ChatView: View {
                 messageList
             }
 
+            // Fade from status bar black into content
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [.black, .black.opacity(0)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 100)
+                Spacer()
+            }
+            .allowsHitTesting(false)
+
             VStack {
                 HStack(alignment: .center) {
                     Button {
