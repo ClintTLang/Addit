@@ -53,7 +53,7 @@ struct ChatView: View {
                 messageList
             }
 
-            // Fade from status bar black into content
+            // Fades from safe area edges into content
             VStack(spacing: 0) {
                 LinearGradient(
                     colors: [.black, .black.opacity(0)],
@@ -62,7 +62,14 @@ struct ChatView: View {
                 )
                 .frame(height: 100)
                 Spacer()
+                LinearGradient(
+                    colors: [.black, .black.opacity(0)],
+                    startPoint: .bottom,
+                    endPoint: .top
+                )
+                .frame(height: 60)
             }
+            .ignoresSafeArea(.keyboard)
             .allowsHitTesting(false)
 
             VStack {
@@ -204,7 +211,7 @@ struct ChatView: View {
             .clipped()
             .ignoresSafeArea(.keyboard)
             .scrollDismissesKeyboard(.interactively)
-            .gesture(
+            .simultaneousGesture(
                 DragGesture(minimumDistance: 30)
                     .onChanged { value in
                         let horizontal = value.translation.width
