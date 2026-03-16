@@ -12,7 +12,7 @@ struct AlbumDetailView: View {
     @State private var syncError: String?
     @State private var showEditSheet = false
     @State private var showSharingSheet = false
-    @State private var showChatSheet = false
+    @State private var navigateToChat = false
     @State private var albumImage: UIImage?
     @State private var queuedTrackId: String?
     @State private var displayItems: [TracklistItem] = []
@@ -233,7 +233,7 @@ struct AlbumDetailView: View {
                     Divider()
 
                     Button {
-                        showChatSheet = true
+                        navigateToChat = true
                         withAnimation { showToolbarActions = false }
                     } label: {
                         Label("Chat", systemImage: "bubble.left")
@@ -265,7 +265,7 @@ struct AlbumDetailView: View {
         .sheet(isPresented: $showSharingSheet) {
             SharingSheet(album: album)
         }
-        .sheet(isPresented: $showChatSheet) {
+        .navigationDestination(isPresented: $navigateToChat) {
             ChatView(album: album)
         }
         .sheet(isPresented: $showEditSheet, onDismiss: {

@@ -114,6 +114,12 @@ struct SharingSheet: View {
                         else { Text("Anyone with the link: Viewer") }
                     }
                     Button {
+                        Task { await updateGeneralAccess(.anyoneCommenter) }
+                    } label: {
+                        if generalAccess == .anyoneCommenter { Label("Anyone with the link: Commenter", systemImage: "checkmark") }
+                        else { Text("Anyone with the link: Commenter") }
+                    }
+                    Button {
                         Task { await updateGeneralAccess(.anyoneEditor) }
                     } label: {
                         if generalAccess == .anyoneEditor { Label("Anyone with the link: Editor", systemImage: "checkmark") }
@@ -181,6 +187,7 @@ struct SharingSheet: View {
 
                 Picker("Role", selection: $newRole) {
                     Text("Viewer").tag("reader")
+                    Text("Commenter").tag("commenter")
                     Text("Editor").tag("writer")
                 }
                 .labelsHidden()
@@ -251,6 +258,10 @@ struct SharingSheet: View {
                 if permission.role == "reader" { Label("Viewer", systemImage: "checkmark") }
                 else { Text("Viewer") }
             }
+            Button { handleRoleChange(permission: permission, to: "commenter") } label: {
+                if permission.role == "commenter" { Label("Commenter", systemImage: "checkmark") }
+                else { Text("Commenter") }
+            }
             Button { handleRoleChange(permission: permission, to: "writer") } label: {
                 if permission.role == "writer" { Label("Editor", systemImage: "checkmark") }
                 else { Text("Editor") }
@@ -308,7 +319,7 @@ struct SharingSheet: View {
     private var generalAccessIcon: String {
         switch generalAccess {
         case .restricted: return "lock"
-        case .anyoneViewer, .anyoneEditor: return "link"
+        case .anyoneViewer, .anyoneCommenter, .anyoneEditor: return "link"
         }
     }
 
@@ -342,7 +353,11 @@ struct SharingSheet: View {
             permissions = perms
 
             if let anyonePerm = perms.first(where: { $0.type == "anyone" }) {
-                generalAccess = anyonePerm.role == "writer" ? .anyoneEditor : .anyoneViewer
+                switch anyonePerm.role {
+                case "writer": generalAccess = .anyoneEditor
+                case "commenter": generalAccess = .anyoneCommenter
+                default: generalAccess = .anyoneViewer
+                }
             } else {
                 generalAccess = .restricted
             }
@@ -361,7 +376,11 @@ struct SharingSheet: View {
             permissions = perms
 
             if let anyonePerm = perms.first(where: { $0.type == "anyone" }) {
-                generalAccess = anyonePerm.role == "writer" ? .anyoneEditor : .anyoneViewer
+                switch anyonePerm.role {
+                case "writer": generalAccess = .anyoneEditor
+                case "commenter": generalAccess = .anyoneCommenter
+                default: generalAccess = .anyoneViewer
+                }
             } else {
                 generalAccess = .restricted
             }
@@ -389,6 +408,8 @@ struct SharingSheet: View {
                 break
             case .anyoneViewer:
                 try await driveService.createAnyonePermission(fileId: album.googleFolderId, role: "reader")
+            case .anyoneCommenter:
+                try await driveService.createAnyonePermission(fileId: album.googleFolderId, role: "commenter")
             case .anyoneEditor:
                 try await driveService.createAnyonePermission(fileId: album.googleFolderId, role: "writer")
             }

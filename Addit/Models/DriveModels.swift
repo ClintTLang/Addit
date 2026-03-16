@@ -102,12 +102,14 @@ struct DriveCommentAuthor: Codable {
 enum GeneralAccess: Equatable {
     case restricted
     case anyoneViewer
+    case anyoneCommenter
     case anyoneEditor
 
     var label: String {
         switch self {
         case .restricted: return "Restricted"
         case .anyoneViewer: return "Anyone with the link: Viewer"
+        case .anyoneCommenter: return "Anyone with the link: Commenter"
         case .anyoneEditor: return "Anyone with the link: Editor"
         }
     }
@@ -116,6 +118,7 @@ enum GeneralAccess: Equatable {
         switch self {
         case .restricted: return "Only people added can open"
         case .anyoneViewer: return "Anyone with the link can view"
+        case .anyoneCommenter: return "Anyone with the link can comment"
         case .anyoneEditor: return "Anyone with the link can edit"
         }
     }

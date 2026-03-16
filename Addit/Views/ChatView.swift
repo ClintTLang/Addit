@@ -5,7 +5,6 @@ struct ChatView: View {
     @Environment(GoogleDriveService.self) private var driveService
     @Environment(GoogleAuthService.self) private var authService
     @Environment(\.dismiss) private var dismiss
-
     @State private var messages: [DriveComment] = []
     @State private var messageText = ""
     @State private var isLoading = true
@@ -15,6 +14,8 @@ struct ChatView: View {
     @State private var hasLoadedAll = false
     @State private var timestampDragOffset: CGFloat = 0
     @State private var timestampGeneration = 0
+    @State private var members: [DrivePermission] = []
+    @State private var showSharingSheet = false
 
     private var chatFileId: String? {
         album.additDataFileId
@@ -25,13 +26,16 @@ struct ChatView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if isLoading && messages.isEmpty {
+        ZStack {
+            if isLoading && messages.isEmpty {
+                VStack {
                     Spacer()
                     ProgressView("Loading messages...")
                     Spacer()
-                } else if let error {
+                }
+                .frame(maxWidth: .infinity)
+            } else if let error {
+                VStack {
                     Spacer()
                     ContentUnavailableView {
                         Label("Couldn't Load Chat", systemImage: "exclamationmark.bubble")
@@ -44,24 +48,113 @@ struct ChatView: View {
                         }
                     }
                     Spacer()
-                } else {
-                    messageList
                 }
+            } else {
+                messageList
+            }
+
+            VStack {
+                HStack(alignment: .center) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title3.weight(.semibold))
+                            .padding(10)
+                            .glassEffect(.regular, in: Circle())
+                    }
+
+                    Spacer()
+
+                    Button {
+                        showSharingSheet = true
+                    } label: {
+                        chatHeader
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    // Balance the back button width
+                    Color.clear
+                        .frame(width: 38, height: 38)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+
+                Spacer()
 
                 composerBar
             }
-            .background(Color(.systemBackground))
-            .navigationTitle("Chat")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+        }
+        .navigationBarHidden(true)
+        .sheet(isPresented: $showSharingSheet) {
+            SharingSheet(album: album)
+                .environment(driveService)
+                .environment(authService)
         }
         .task {
             await loadMessages()
+            await loadMembers()
         }
+    }
+
+    // MARK: - Chat Header
+
+    private var userMembers: [DrivePermission] {
+        members.filter { $0.type == "user" }
+    }
+
+    private var chatHeader: some View {
+        VStack(spacing: 2) {
+            if !userMembers.isEmpty {
+                HStack(spacing: -6) {
+                    ForEach(userMembers.prefix(3)) { member in
+                        memberAvatar(member)
+                    }
+                    if userMembers.count > 3 {
+                        Text("and \(userMembers.count - 3) more")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 10)
+                    }
+                }
+            }
+            Text(album.name)
+                .font(.subheadline.weight(.semibold))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .glassEffect(.regular, in: Capsule())
+    }
+
+    @ViewBuilder
+    private func memberAvatar(_ member: DrivePermission) -> some View {
+        if let photoLink = member.photoLink,
+           let url = URL(string: photoLink.hasPrefix("//") ? "https:\(photoLink)" : photoLink) {
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                memberInitials(member)
+            }
+            .frame(width: 24, height: 24)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1.5))
+        } else {
+            memberInitials(member)
+        }
+    }
+
+    private func memberInitials(_ member: DrivePermission) -> some View {
+        Circle()
+            .fill(Color(.systemGray4))
+            .frame(width: 24, height: 24)
+            .overlay {
+                Text(String((member.displayName ?? member.emailAddress ?? "?").prefix(1)).uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1.5))
     }
 
     // MARK: - Message List
@@ -90,10 +183,12 @@ struct ChatView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.top, 70)
+                .padding(.bottom, 60)
                 .offset(x: timestampDragOffset)
             }
             .clipped()
+            .ignoresSafeArea(.keyboard)
             .scrollDismissesKeyboard(.interactively)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 15)
@@ -204,6 +299,14 @@ struct ChatView: View {
             hasLoadedAll = response.nextPageToken == nil
         } catch {
             // Silently fail on pagination
+        }
+    }
+
+    private func loadMembers() async {
+        do {
+            members = try await driveService.listPermissions(fileId: album.googleFolderId)
+        } catch {
+            // Non-critical — header just won't show avatars
         }
     }
 
