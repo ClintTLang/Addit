@@ -23,7 +23,7 @@ struct ContentView: View {
                         LibraryView()
                     }
 
-                    if playerService.currentTrack != nil {
+                    if playerService.currentTrack != nil && !playerService.hideNowPlayingBar {
                         NowPlayingBar(showFullPlayer: $showNowPlaying)
                     }
                 }

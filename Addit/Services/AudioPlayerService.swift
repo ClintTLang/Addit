@@ -21,6 +21,7 @@ final class AudioPlayerService {
     var repeatMode: RepeatMode = .off
     var isLoading: Bool = false
     var isSeeking: Bool = false
+    var hideNowPlayingBar: Bool = false
     var userQueue: [Track] = []
 
     var currentTrack: Track? {

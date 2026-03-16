@@ -4,6 +4,7 @@ struct ChatView: View {
     let album: Album
     @Environment(GoogleDriveService.self) private var driveService
     @Environment(GoogleAuthService.self) private var authService
+    @Environment(AudioPlayerService.self) private var playerService
     @Environment(\.dismiss) private var dismiss
     @State private var messages: [DriveComment] = []
     @State private var messageText = ""
@@ -56,14 +57,14 @@ struct ChatView: View {
             // Fades from safe area edges into content
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [.black, .black.opacity(0)],
+                    colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
                 .frame(height: 100)
                 Spacer()
                 LinearGradient(
-                    colors: [.black, .black.opacity(0)],
+                    colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
                     startPoint: .bottom,
                     endPoint: .top
                 )
@@ -117,6 +118,8 @@ struct ChatView: View {
             async let mbrs: () = loadMembers()
             _ = await (msgs, mbrs)
         }
+        .onAppear { playerService.hideNowPlayingBar = true }
+        .onDisappear { playerService.hideNowPlayingBar = false }
     }
 
     // MARK: - Chat Header
