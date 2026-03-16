@@ -48,9 +48,9 @@ struct ChatView: View {
                     messageList
                 }
 
-                Divider()
                 composerBar
             }
+            .background(Color(.systemBackground))
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -79,9 +79,13 @@ struct ChatView: View {
                         .padding(.vertical, 8)
                     }
 
-                    ForEach(sortedMessages) { message in
+                    ForEach(Array(sortedMessages.enumerated()), id: \.element.id) { index, message in
                         let isMe = message.author.me
-                        ChatBubble(message: message, isMe: isMe, showTimestamp: showTimestamps)
+                        let previousAuthor = index > 0 ? sortedMessages[index - 1].author.displayName : nil
+                        let nextAuthor = index < sortedMessages.count - 1 ? sortedMessages[index + 1].author.displayName : nil
+                        let showName = !isMe && message.author.displayName != previousAuthor
+                        let showAvatar = !isMe && message.author.displayName != nextAuthor
+                        ChatBubble(message: message, isMe: isMe, showName: showName, showAvatar: showAvatar, showTimestamp: showTimestamps)
                             .id(message.id)
                     }
                 }
@@ -90,6 +94,7 @@ struct ChatView: View {
                 .offset(x: timestampDragOffset)
             }
             .clipped()
+            .scrollDismissesKeyboard(.interactively)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 15)
                     .onChanged { value in
@@ -138,26 +143,34 @@ struct ChatView: View {
 
     // MARK: - Composer
 
+    private var hasText: Bool {
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var composerBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             TextField("Message", text: $messageText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            Button {
-                Task { await sendMessage() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .blue)
+            if hasText {
+                Button {
+                    Task { await sendMessage() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                }
+                .disabled(isSending)
+                .transition(.scale.combined(with: .opacity))
             }
-            .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .animation(.easeInOut(duration: 0.2), value: hasText)
     }
 
     // MARK: - Data
@@ -217,6 +230,8 @@ struct ChatView: View {
 private struct ChatBubble: View {
     let message: DriveComment
     let isMe: Bool
+    let showName: Bool
+    let showAvatar: Bool
     let showTimestamp: Bool
 
     var body: some View {
@@ -224,14 +239,19 @@ private struct ChatBubble: View {
             if isMe { Spacer(minLength: 48) }
 
             if !isMe {
-                authorAvatar
+                if showAvatar {
+                    authorAvatar
+                } else {
+                    Color.clear.frame(width: 28, height: 28)
+                }
             }
 
-            VStack(alignment: isMe ? .trailing : .leading, spacing: 2) {
-                if !isMe {
+            VStack(alignment: .leading, spacing: 2) {
+                if showName {
                     Text(message.author.displayName)
                         .font(.caption2.bold())
                         .foregroundStyle(.secondary)
+                        .padding(.leading, 12)
                 }
 
                 Text(message.content)
@@ -261,7 +281,8 @@ private struct ChatBubble: View {
 
     @ViewBuilder
     private var authorAvatar: some View {
-        if let photoLink = message.author.photoLink, let url = URL(string: photoLink) {
+        if let photoLink = message.author.photoLink,
+           let url = URL(string: photoLink.hasPrefix("//") ? "https:\(photoLink)" : photoLink) {
             AsyncImage(url: url) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
