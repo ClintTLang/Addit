@@ -71,6 +71,34 @@ struct DrivePermission: Codable, Identifiable {
     }
 }
 
+// MARK: - Comments
+
+struct DriveCommentListResponse: Codable {
+    let comments: [DriveComment]
+    let nextPageToken: String?
+}
+
+struct DriveComment: Codable, Identifiable {
+    let id: String
+    let content: String
+    let createdTime: String
+    let author: DriveCommentAuthor
+
+    var createdDate: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: createdTime) ?? ISO8601DateFormatter().date(from: createdTime)
+    }
+}
+
+struct DriveCommentAuthor: Codable {
+    let displayName: String
+    let photoLink: String?
+    let me: Bool
+}
+
+// MARK: - General Access
+
 enum GeneralAccess: Equatable {
     case restricted
     case anyoneViewer

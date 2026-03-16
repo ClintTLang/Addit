@@ -379,6 +379,56 @@ final class GoogleDriveService {
         try validateResponse(response)
     }
 
+    // MARK: - Comments
+
+    func listComments(fileId: String, pageToken: String? = nil, pageSize: Int = 100) async throws -> DriveCommentListResponse {
+        let token = try await getToken()
+        var components = URLComponents(string: "\(baseURL)/files/\(fileId)/comments")!
+        var queryItems = [
+            URLQueryItem(name: "fields", value: "comments(id,content,createdTime,author),nextPageToken"),
+            URLQueryItem(name: "pageSize", value: "\(pageSize)")
+        ]
+        if let pageToken {
+            queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        components.queryItems = queryItems
+
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(DriveCommentListResponse.self, from: data)
+    }
+
+    @discardableResult
+    func createComment(fileId: String, content: String) async throws -> DriveComment {
+        let token = try await getToken()
+        let url = URL(string: "\(baseURL)/files/\(fileId)/comments?fields=id,content,createdTime,author")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["content": content])
+
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(DriveComment.self, from: data)
+    }
+
+    func deleteComment(fileId: String, commentId: String) async throws {
+        let token = try await getToken()
+        let url = URL(string: "\(baseURL)/files/\(fileId)/comments/\(commentId)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
     // MARK: - Private
 
     private func listFiles(query: String, pageToken: String? = nil,

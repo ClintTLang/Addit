@@ -12,9 +12,12 @@ struct AlbumDetailView: View {
     @State private var syncError: String?
     @State private var showEditSheet = false
     @State private var showSharingSheet = false
+    @State private var showChatSheet = false
     @State private var albumImage: UIImage?
     @State private var queuedTrackId: String?
     @State private var displayItems: [TracklistItem] = []
+    @State private var showToolbarActions = false
+    @State private var toolbarActionGeneration = 0
 
     private let coverSize: CGFloat = 200
 
@@ -181,22 +184,89 @@ struct AlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 16) {
+                Button {
+                    toolbarActionGeneration += 1
+                    let gen = toolbarActionGeneration
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showToolbarActions = true
+                    }
+                    Task {
+                        try? await Task.sleep(for: .seconds(5))
+                        if toolbarActionGeneration == gen {
+                            withAnimation(.easeIn(duration: 0.2)) {
+                                showToolbarActions = false
+                            }
+                        }
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis")
+                }
+            }
+        }
+        .simultaneousGesture(
+            showToolbarActions
+                ? TapGesture().onEnded {
+                    withAnimation(.easeIn(duration: 0.2)) { showToolbarActions = false }
+                }
+                : nil
+        )
+        .simultaneousGesture(
+            showToolbarActions
+                ? DragGesture(minimumDistance: 5).onChanged { _ in
+                    withAnimation(.easeIn(duration: 0.2)) { showToolbarActions = false }
+                }
+                : nil
+        )
+        .overlay(alignment: .topTrailing) {
+            if showToolbarActions {
+                VStack(alignment: .trailing, spacing: 0) {
                     Button {
                         showSharingSheet = true
+                        withAnimation { showToolbarActions = false }
                     } label: {
                         Label("Sharing", systemImage: "person.2")
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+
+                    Divider()
+
+                    Button {
+                        showChatSheet = true
+                        withAnimation { showToolbarActions = false }
+                    } label: {
+                        Label("Chat", systemImage: "bubble.left")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+
+                    Divider()
+
                     Button {
                         showEditSheet = true
+                        withAnimation { showToolbarActions = false }
                     } label: {
                         Label("Edit", systemImage: "pencil")
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
+                .frame(width: 170)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .padding(.trailing, 16)
+                .padding(.top, 4)
+                .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .topTrailing)))
             }
         }
         .sheet(isPresented: $showSharingSheet) {
             SharingSheet(album: album)
+        }
+        .sheet(isPresented: $showChatSheet) {
+            ChatView(album: album)
         }
         .sheet(isPresented: $showEditSheet, onDismiss: {
             Task { await syncFromDrive() }
@@ -297,6 +367,7 @@ struct AlbumDetailView: View {
         // Try .addit-data (JSON) first
         do {
             if let item = try await driveService.findFile(named: ".addit-data", inFolder: album.googleFolderId) {
+                album.additDataFileId = item.id
                 let data = try await driveService.downloadFileData(fileId: item.id)
                 metadata = try? JSONDecoder().decode(AdditMetadata.self, from: data)
             }
