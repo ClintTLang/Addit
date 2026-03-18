@@ -7,10 +7,12 @@ struct NowPlayingView: View {
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(AlbumArtService.self) private var albumArtService
     @Environment(ThemeService.self) private var themeService
+    @Environment(AudioAnalyzerService.self) private var analyzer
     @Environment(\.dismiss) private var dismiss
     @State private var seekValue: TimeInterval = 0
     @State private var albumImage: UIImage?
     @State private var showQueueSheet = false
+    @State private var showVisualizer = false
 
     private var artworkTaskID: String? {
         guard let album = playerService.currentTrack?.album else { return nil }
@@ -30,36 +32,44 @@ struct NowPlayingView: View {
 
             Spacer()
 
-            // Album art placeholder
-            RoundedRectangle(cornerRadius: 20)
-                .fill(
-                    LinearGradient(
-                        colors: [themeService.accentColor.opacity(0.6), themeService.accentColor.opacity(0.2)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: 320)
-                .overlay {
-                    Group {
-                        if let albumImage {
-                            Image(uiImage: albumImage)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Image(systemName: "music.note")
-                                .font(.system(size: 80))
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .shadow(radius: 20, y: 10)
-                .padding(.horizontal, 40)
+            // Album art / EQ visualizer
+            TabView(selection: $showVisualizer) {
+                albumArtView
+                    .tag(false)
+                EQVisualizerView()
+                    .padding(.top, 20)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .tag(true)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: 320)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .shadow(radius: 20, y: 10)
+            .padding(.horizontal, 40)
+            .onChange(of: showVisualizer) { _, visible in
+                if visible { analyzer.start() } else { analyzer.stop() }
+            }
+
+            // Page indicator icons
+            HStack(spacing: 12) {
+                // Album icon — small rounded square
+                Image(systemName: "square.fill")
+                    .font(.system(size: 8))
+                    .foregroundColor(showVisualizer ? .secondary.opacity(0.4) : .primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 1.5))
+
+                // EQ icon — small bar chart
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(showVisualizer ? .primary : .secondary.opacity(0.4))
+            }
+            .padding(.top, 12)
+            .padding(.bottom, 4)
 
             Spacer()
-                .frame(height: 32)
+                .frame(height: 16)
 
             // Track info
             VStack(spacing: 4) {
@@ -198,6 +208,32 @@ struct NowPlayingView: View {
             albumImage = resolution.image
             albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
         }
+    }
+
+    private var albumArtView: some View {
+        RoundedRectangle(cornerRadius: 20)
+            .fill(
+                LinearGradient(
+                    colors: [themeService.accentColor.opacity(0.6), themeService.accentColor.opacity(0.2)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                Group {
+                    if let albumImage {
+                        Image(uiImage: albumImage)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 80))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var nowPlayingSubtitle: String {

@@ -29,16 +29,21 @@ final class AudioPlayerService {
         return queue[currentIndex]
     }
 
-    @ObservationIgnored private var player = AVPlayer()
-    @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var endObserver: NSObjectProtocol?
+    /// Exposed for AudioAnalyzerService to install taps
+    @ObservationIgnored let engine = AVAudioEngine()
+    @ObservationIgnored private let playerNode = AVAudioPlayerNode()
+    @ObservationIgnored private var currentAudioFile: AVAudioFile?
+    @ObservationIgnored private var seekFrameOffset: AVAudioFramePosition = 0
+    @ObservationIgnored private var timeTimer: Timer?
     @ObservationIgnored private var originalQueue: [Track] = []
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
+    /// Incremented each time we load or seek; the completion handler checks this to ignore stale callbacks
+    @ObservationIgnored private var scheduleGeneration: UInt64 = 0
+    @ObservationIgnored private var isLoadingTrack = false
 
     init() {
         configureAudioSession()
-        setupTimeObserver()
-        setupEndObserver()
+        setupEngine()
         setupRemoteCommands()
     }
 
@@ -80,14 +85,23 @@ final class AudioPlayerService {
     }
 
     func play() {
-        player.play()
-        isPlaying = true
-        updateNowPlayingPlaybackInfo()
+        do {
+            if !engine.isRunning {
+                try engine.start()
+            }
+            playerNode.play()
+            isPlaying = true
+            startTimeTracking()
+            updateNowPlayingPlaybackInfo()
+        } catch {
+            print("Engine start error: \(error.localizedDescription)")
+        }
     }
 
     func pause() {
-        player.pause()
+        playerNode.pause()
         isPlaying = false
+        stopTimeTracking()
         updateNowPlayingPlaybackInfo()
     }
 
@@ -144,11 +158,32 @@ final class AudioPlayerService {
     }
 
     func seek(to time: TimeInterval) {
+        guard let audioFile = currentAudioFile else { return }
         currentTime = time
-        let cmTime = CMTime(seconds: time, preferredTimescale: 600)
-        player.seek(to: cmTime) { [weak self] _ in
-            self?.updateNowPlayingPlaybackInfo()
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let targetFrame = AVAudioFramePosition(time * sampleRate)
+        let totalFrames = audioFile.length
+
+        guard targetFrame < totalFrames else { return }
+
+        // Invalidate any pending completion
+        scheduleGeneration &+= 1
+        let gen = scheduleGeneration
+
+        let wasPlaying = isPlaying
+        playerNode.stop()
+
+        seekFrameOffset = targetFrame
+        let remainingFrames = AVAudioFrameCount(totalFrames - targetFrame)
+
+        playerNode.scheduleSegment(audioFile, startingFrame: targetFrame, frameCount: remainingFrames, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            self?.completionFired(generation: gen)
         }
+
+        if wasPlaying {
+            playerNode.play()
+        }
+        updateNowPlayingPlaybackInfo()
     }
 
     func beginSeeking() {
@@ -196,35 +231,61 @@ final class AudioPlayerService {
         userQueue.move(fromOffsets: source, toOffset: destination)
     }
 
+    // MARK: - Engine Setup
+
+    private func setupEngine() {
+        engine.attach(playerNode)
+        engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
+        engine.prepare()
+    }
+
     // MARK: - Private
+
+    private func completionFired(generation: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, generation == self.scheduleGeneration, !self.isLoadingTrack else { return }
+            self.handleTrackEnd()
+        }
+    }
 
     private func loadAndPlay() async {
         guard let track = currentTrack, let cacheService else { return }
 
+        isLoadingTrack = true
         isLoading = true
+
+        // Invalidate any pending completion from previous track
+        scheduleGeneration &+= 1
+        let gen = scheduleGeneration
+
+        playerNode.stop()
+
         do {
             let fileURL = try await cacheService.cacheTrack(track)
-            let item = AVPlayerItem(url: fileURL)
-            player.replaceCurrentItem(with: item)
+            let audioFile = try AVAudioFile(forReading: fileURL)
 
-            // Wait for ready state
-            while item.status == .unknown {
-                try await Task.sleep(for: .milliseconds(50))
+            currentAudioFile = audioFile
+            seekFrameOffset = 0
+
+            // Reconnect with the file's format
+            engine.disconnectNodeOutput(playerNode)
+            engine.connect(playerNode, to: engine.mainMixerNode, format: audioFile.processingFormat)
+
+            duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+            currentTime = 0
+
+            playerNode.scheduleSegment(audioFile, startingFrame: 0, frameCount: AVAudioFrameCount(audioFile.length), at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                self?.completionFired(generation: gen)
             }
 
-            if item.status == .readyToPlay {
-                let dur = try await item.asset.load(.duration)
-                duration = CMTimeGetSeconds(dur)
-                currentTime = 0
-                isLoading = false
-                play()
-                updateNowPlayingInfo()
-                prefetchUpcoming()
-            } else {
-                isLoading = false
-            }
+            isLoading = false
+            isLoadingTrack = false
+            play()
+            updateNowPlayingInfo()
+            prefetchUpcoming()
         } catch {
             isLoading = false
+            isLoadingTrack = false
             print("Failed to load track: \(error.localizedDescription)")
         }
     }
@@ -234,7 +295,6 @@ final class AudioPlayerService {
         prefetchTask = Task {
             guard let cacheService else { return }
 
-            // Prefetch user queue tracks first, then album queue
             var tracksToPrefetch: [Track] = Array(userQueue.prefix(2))
             if tracksToPrefetch.count < 2 {
                 let remaining = 2 - tracksToPrefetch.count
@@ -246,9 +306,7 @@ final class AudioPlayerService {
                 guard !Task.isCancelled else { return }
                 do {
                     _ = try await cacheService.cacheTrack(track)
-                } catch {
-                    // Prefetch is best-effort; don't block on failure
-                }
+                } catch {}
             }
         }
     }
@@ -277,21 +335,32 @@ final class AudioPlayerService {
         }
     }
 
-    private func setupTimeObserver() {
-        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self, !self.isSeeking else { return }
-            self.currentTime = CMTimeGetSeconds(time)
+    // MARK: - Time Tracking
+
+    private func startTimeTracking() {
+        stopTimeTracking()
+        timeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.updateCurrentTime()
         }
     }
 
-    private func setupEndObserver() {
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleTrackEnd()
+    private func stopTimeTracking() {
+        timeTimer?.invalidate()
+        timeTimer = nil
+    }
+
+    private func updateCurrentTime() {
+        guard !isSeeking,
+              let nodeTime = playerNode.lastRenderTime,
+              nodeTime.isSampleTimeValid,
+              let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
+              let audioFile = currentAudioFile else { return }
+
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let elapsedFrames = playerTime.sampleTime
+        let time = Double(seekFrameOffset + elapsedFrames) / sampleRate
+        if time >= 0 && time <= duration {
+            currentTime = time
         }
     }
 
@@ -360,7 +429,6 @@ final class AudioPlayerService {
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
-        // Load album artwork asynchronously
         if let coverFileId = currentTrack?.album?.coverFileId, let albumArtService {
             Task {
                 if let image = await albumArtService.image(for: coverFileId) {

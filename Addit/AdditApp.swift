@@ -10,6 +10,7 @@ struct AdditApp: App {
     @State private var cacheService = AudioCacheService()
     @State private var albumArtService = AlbumArtService()
     @State private var themeService = ThemeService()
+    @State private var analyzerService = AudioAnalyzerService()
 
     let modelContainer: ModelContainer
 
@@ -41,6 +42,7 @@ struct AdditApp: App {
                 .environment(cacheService)
                 .environment(albumArtService)
                 .environment(themeService)
+                .environment(analyzerService)
                 .onOpenURL { url in
                     GIDSignIn.sharedInstance.handle(url)
                 }
@@ -50,6 +52,7 @@ struct AdditApp: App {
                     albumArtService.driveService = driveService
                     playerService.cacheService = cacheService
                     playerService.albumArtService = albumArtService
+                    analyzerService.configure(playerService: playerService)
                     await authService.restorePreviousSignIn()
                 }
         }
