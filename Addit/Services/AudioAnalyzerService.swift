@@ -13,6 +13,7 @@ final class AudioAnalyzerService {
     // FFT setup
     @ObservationIgnored private var fftSetup: vDSP_DFT_Setup?
     @ObservationIgnored private let fftSize = 4096
+    @ObservationIgnored private var sampleRate: Float = 44100.0
 
     init() {
         fftSetup = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(fftSize), .FORWARD)
@@ -36,6 +37,7 @@ final class AudioAnalyzerService {
         let format = mixer.outputFormat(forBus: 0)
 
         guard format.sampleRate > 0 else { return }
+        sampleRate = Float(format.sampleRate)
 
         mixer.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftSize), format: nil) { [weak self] buffer, _ in
             self?.processBuffer(buffer)
@@ -92,9 +94,9 @@ final class AudioAnalyzerService {
         let normFactor = 2.0 / Float(fftSize)
         vDSP_vsmul(magnitudes, 1, [normFactor], &magnitudes, 1, vDSP_Length(halfSize))
 
-        // Convert to dB
+        // Convert to dB (flag 1 = amplitude, i.e. 20·log10)
         var one: Float = 1.0
-        vDSP_vdbcon(magnitudes, 1, &one, &magnitudes, 1, vDSP_Length(halfSize), 0)
+        vDSP_vdbcon(magnitudes, 1, &one, &magnitudes, 1, vDSP_Length(halfSize), 1)
 
         // Map to 16 bands using logarithmic frequency distribution
         let newBands = mapToBands(magnitudes, binCount: halfSize)
@@ -116,14 +118,15 @@ final class AudioAnalyzerService {
         let maxFreq: Float = 20000.0
         let logMin = log2(minFreq)
         let logMax = log2(maxFreq)
+        let nyquist = sampleRate / 2.0
 
         for band in 0..<bandCount {
             let lowFreq = pow(2.0, logMin + (logMax - logMin) * Float(band) / Float(bandCount))
             let highFreq = pow(2.0, logMin + (logMax - logMin) * Float(band + 1) / Float(bandCount))
 
-            // Convert frequency to bin index (assuming 44100 sample rate as approximate)
-            let lowBin = max(0, Int(lowFreq / 22050.0 * Float(binCount)))
-            let highBin = min(binCount - 1, Int(highFreq / 22050.0 * Float(binCount)))
+            // Convert frequency to bin index using actual sample rate
+            let lowBin = max(0, Int(lowFreq / nyquist * Float(binCount)))
+            let highBin = min(binCount - 1, Int(highFreq / nyquist * Float(binCount)))
 
             if lowBin <= highBin {
                 var sum: Float = 0
