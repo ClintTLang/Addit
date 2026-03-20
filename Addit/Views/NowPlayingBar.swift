@@ -68,10 +68,17 @@ struct NowPlayingBar: View {
                     Text(playerService.currentTrack?.displayName ?? "")
                         .font(.subheadline.bold())
                         .lineLimit(1)
-                    Text(miniPlayerSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let error = playerService.playbackError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(1)
+                    } else {
+                        Text(miniPlayerSubtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer()

@@ -39,7 +39,7 @@ final class GoogleDriveService {
     }
 
     func listAudioFiles(inFolder folderId: String, pageToken: String? = nil) async throws -> DriveFileListResponse {
-        let query = "'\(folderId)' in parents and mimeType contains 'audio/' and trashed=false"
+        let query = "'\(folderId)' in parents and (mimeType contains 'audio/' or mimeType = 'video/mp4') and trashed=false"
         return try await listFiles(query: query, pageToken: pageToken, pageSize: 1000, orderBy: "name")
     }
 

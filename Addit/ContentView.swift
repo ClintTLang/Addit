@@ -35,5 +35,15 @@ struct ContentView: View {
             }
         }
         .tint(themeService.accentColor)
+        .alert("Unable to play this audio format", isPresented: .init(
+            get: { playerService.failedTrack != nil },
+            set: { if !$0 { playerService.failedTrack = nil } }
+        )) {
+            Button("OK", role: .cancel) {
+                playerService.failedTrack = nil
+            }
+        } message: {
+            Text("This file uses an audio format that Addit doesn't support.")
+        }
     }
 }

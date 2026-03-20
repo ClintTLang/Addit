@@ -63,14 +63,17 @@ final class AudioCacheService {
     }
 
     private func cacheFilePath(for track: Track) -> URL {
-        let ext = fileExtension(for: track.mimeType)
+        // Prefer the original file's extension over MIME type, since Google Drive
+        // sometimes reports incorrect MIME types (e.g. m4a files as audio/mpeg)
+        let originalExt = (track.name as NSString).pathExtension.lowercased()
+        let ext = originalExt.isEmpty ? fileExtension(for: track.mimeType) : originalExt
         return cacheDirectory.appendingPathComponent("\(track.googleFileId).\(ext)")
     }
 
     private func fileExtension(for mimeType: String) -> String {
         switch mimeType {
         case "audio/mpeg": return "mp3"
-        case "audio/mp4", "audio/x-m4a": return "m4a"
+        case "audio/mp4", "audio/x-m4a", "video/mp4": return "m4a"
         case "audio/aac": return "aac"
         case "audio/ogg": return "ogg"
         case "audio/flac", "audio/x-flac": return "flac"

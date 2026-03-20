@@ -76,10 +76,17 @@ struct NowPlayingView: View {
                 Text(playerService.currentTrack?.displayName ?? "Not Playing")
                     .font(.title3.bold())
                     .lineLimit(1)
-                Text(nowPlayingSubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let error = playerService.playbackError {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                } else {
+                    Text(nowPlayingSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .padding(.horizontal, 24)
 

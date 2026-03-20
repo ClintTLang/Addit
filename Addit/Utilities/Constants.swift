@@ -19,6 +19,7 @@ enum Constants {
         "audio/x-wav",
         "audio/aiff",
         "audio/x-aiff",
-        "audio/alac"
+        "audio/alac",
+        "video/mp4"
     ]
 }

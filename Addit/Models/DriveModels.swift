@@ -20,7 +20,7 @@ struct DriveItem: Codable, Identifiable, Hashable {
     }
 
     var isAudio: Bool {
-        mimeType.hasPrefix("audio/")
+        mimeType.hasPrefix("audio/") || mimeType == "video/mp4"
     }
 
     var canEdit: Bool {

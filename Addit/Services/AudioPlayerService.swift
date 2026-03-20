@@ -23,6 +23,8 @@ final class AudioPlayerService {
     var isSeeking: Bool = false
     var hideNowPlayingBar: Bool = false
     var userQueue: [Track] = []
+    var playbackError: String? = nil
+    var failedTrack: Track? = nil
 
     var currentTrack: Track? {
         guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return nil }
@@ -262,7 +264,16 @@ final class AudioPlayerService {
 
         do {
             let fileURL = try await cacheService.cacheTrack(track)
-            let audioFile = try AVAudioFile(forReading: fileURL)
+
+            var audioFile: AVAudioFile
+            do {
+                audioFile = try AVAudioFile(forReading: fileURL)
+            } catch {
+                // AVAudioFile can't read this format — try converting via AVAssetExportSession
+                print("AVAudioFile failed, attempting conversion: \(error.localizedDescription)")
+                let convertedURL = try await convertToCompatibleFormat(fileURL)
+                audioFile = try AVAudioFile(forReading: convertedURL)
+            }
 
             currentAudioFile = audioFile
             seekFrameOffset = 0
@@ -278,6 +289,7 @@ final class AudioPlayerService {
                 self?.completionFired(generation: gen)
             }
 
+            playbackError = nil
             isLoading = false
             isLoadingTrack = false
             play()
@@ -286,8 +298,173 @@ final class AudioPlayerService {
         } catch {
             isLoading = false
             isLoadingTrack = false
+            failedTrack = track
+            playbackError = "Unable to play this audio format"
             print("Failed to load track: \(error.localizedDescription)")
         }
+    }
+
+    private func convertToCompatibleFormat(_ sourceURL: URL) async throws -> URL {
+        let convertedURL = sourceURL.deletingPathExtension().appendingPathExtension("converted.m4a")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: convertedURL.path) {
+            return convertedURL
+        }
+
+        let asset = AVURLAsset(url: sourceURL)
+
+        // Check if the asset has any playable audio before attempting conversion
+        print("[Convert] Loading tracks for: \(sourceURL.lastPathComponent)")
+        let tracks: [AVAssetTrack]
+        do {
+            tracks = try await asset.loadTracks(withMediaType: .audio)
+            print("[Convert] Found \(tracks.count) audio track(s)")
+        } catch {
+            print("[Convert] loadTracks failed: \(error)")
+            throw error
+        }
+        guard let audioTrack = tracks.first else {
+            print("[Convert] No audio tracks found")
+            throw NSError(domain: "AudioPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "No audio track found"])
+        }
+
+        // Log track format details
+        if let descriptions = try? await audioTrack.load(.formatDescriptions) {
+            for desc in descriptions {
+                let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
+                let fourCC = String(format: "%c%c%c%c",
+                    (mediaSubType >> 24) & 0xFF,
+                    (mediaSubType >> 16) & 0xFF,
+                    (mediaSubType >> 8) & 0xFF,
+                    mediaSubType & 0xFF)
+                print("[Convert] Track format: \(fourCC)")
+                if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+                    print("[Convert] Sample rate: \(asbd.pointee.mSampleRate), channels: \(asbd.pointee.mChannelsPerFrame), bitsPerChannel: \(asbd.pointee.mBitsPerChannel)")
+                }
+            }
+        }
+
+        // First try AVAssetExportSession (fast path) with timeout
+        print("[Convert] Trying AVAssetExportSession...")
+        if let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) {
+            exportSession.outputURL = convertedURL
+            exportSession.outputFileType = .m4a
+
+            let exportResult: Bool = await withCheckedContinuation { continuation in
+                var resumed = false
+                let timeout = DispatchWorkItem {
+                    guard !resumed else { return }
+                    resumed = true
+                    print("[Convert] Export session timed out")
+                    exportSession.cancelExport()
+                    continuation.resume(returning: false)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+
+                Task {
+                    for await state in exportSession.states(updateInterval: 0.1) {
+                        switch state {
+                        case .pending, .waiting, .exporting:
+                            continue
+                        @unknown default:
+                            break
+                        }
+                        break
+                    }
+                    timeout.cancel()
+                    guard !resumed else { return }
+                    resumed = true
+                    let success = fm.fileExists(atPath: convertedURL.path)
+                    print("[Convert] Export session finished, success: \(success)")
+                    if !success {
+                        print("[Convert] Export session failed")
+                    }
+                    continuation.resume(returning: success)
+                }
+            }
+
+            if exportResult {
+                return convertedURL
+            }
+            try? fm.removeItem(at: convertedURL)
+        } else {
+            print("[Convert] Could not create export session")
+        }
+
+        // Fallback: use AVAssetReader + AVAssetWriter for more codec support
+        print("[Convert] Trying AVAssetReader/Writer fallback...")
+        let convertedWAV = sourceURL.deletingPathExtension().appendingPathExtension("converted.wav")
+        if fm.fileExists(atPath: convertedWAV.path) {
+            return convertedWAV
+        }
+
+        nonisolated(unsafe) let reader: AVAssetReader
+        do {
+            reader = try AVAssetReader(asset: asset)
+        } catch {
+            print("[Convert] AVAssetReader init failed: \(error)")
+            throw error
+        }
+        nonisolated(unsafe) let readerOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 2,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ])
+        reader.add(readerOutput)
+
+        let writer = try AVAssetWriter(outputURL: convertedWAV, fileType: .wav)
+        nonisolated(unsafe) let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 2,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ])
+        writer.add(writerInput)
+
+        guard reader.startReading() else {
+            print("[Convert] AVAssetReader startReading failed: \(reader.error?.localizedDescription ?? "unknown")")
+            try? fm.removeItem(at: convertedWAV)
+            throw reader.error ?? NSError(domain: "AudioPlayer", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot read audio data"])
+        }
+        print("[Convert] AVAssetReader started reading")
+
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writerInput.requestMediaDataWhenReady(on: DispatchQueue(label: "audio.convert")) {
+                while writerInput.isReadyForMoreMediaData {
+                    if let buffer = readerOutput.copyNextSampleBuffer() {
+                        writerInput.append(buffer)
+                    } else {
+                        writerInput.markAsFinished()
+                        if reader.status == .failed {
+                            print("[Convert] Reader failed during read: \(reader.error?.localizedDescription ?? "unknown")")
+                        }
+                        continuation.resume()
+                        return
+                    }
+                }
+            }
+        }
+
+        await writer.finishWriting()
+        print("[Convert] Writer finished, status: \(writer.status.rawValue)")
+
+        guard writer.status == .completed else {
+            print("[Convert] Writer failed: \(writer.error?.localizedDescription ?? "unknown")")
+            try? fm.removeItem(at: convertedWAV)
+            throw writer.error ?? NSError(domain: "AudioPlayer", code: -2, userInfo: [NSLocalizedDescriptionKey: "Audio conversion failed"])
+        }
+
+        return convertedWAV
     }
 
     private func prefetchUpcoming() {
