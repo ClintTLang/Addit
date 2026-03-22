@@ -280,8 +280,7 @@ struct AlbumDetailView: View {
                     .padding(.vertical, 12)
                 }
                 .frame(width: 230)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.trailing, 16)
                 .padding(.top, 4)
                 .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .topTrailing)))
@@ -673,7 +672,7 @@ struct TrackRow: View {
                     .contentShape(Rectangle())
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 10)
     }
 
     private func formatFileSize(_ bytes: Int64) -> String {
