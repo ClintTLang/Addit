@@ -36,12 +36,18 @@ final class AudioPlayerService {
     @ObservationIgnored private let playerNode = AVAudioPlayerNode()
     @ObservationIgnored private var currentAudioFile: AVAudioFile?
     @ObservationIgnored private var seekFrameOffset: AVAudioFramePosition = 0
+    @ObservationIgnored private var playerTimeOffset: AVAudioFramePosition = 0
     @ObservationIgnored private var timeTimer: Timer?
     @ObservationIgnored private var originalQueue: [Track] = []
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// Incremented each time we load or seek; the completion handler checks this to ignore stale callbacks
     @ObservationIgnored private var scheduleGeneration: UInt64 = 0
     @ObservationIgnored private var isLoadingTrack = false
+
+    // Gapless playback
+    @ObservationIgnored private var nextAudioFile: AVAudioFile?
+    @ObservationIgnored private var nextTrackIndex: Int?
+    @ObservationIgnored private var isGaplessTransition = false
 
     init() {
         configureAudioSession()
@@ -113,6 +119,7 @@ final class AudioPlayerService {
 
     func next() {
         guard !queue.isEmpty else { return }
+        clearGaplessState()
 
         if repeatMode == .one {
             seek(to: 0)
@@ -142,6 +149,7 @@ final class AudioPlayerService {
 
     func previous() {
         guard !queue.isEmpty else { return }
+        clearGaplessState()
 
         if currentTime > 3.0 {
             seek(to: 0)
@@ -161,6 +169,7 @@ final class AudioPlayerService {
 
     func seek(to time: TimeInterval) {
         guard let audioFile = currentAudioFile else { return }
+        clearGaplessState()
         currentTime = time
         let sampleRate = audioFile.processingFormat.sampleRate
         let targetFrame = AVAudioFramePosition(time * sampleRate)
@@ -175,6 +184,7 @@ final class AudioPlayerService {
         let wasPlaying = isPlaying
         playerNode.stop()
 
+        playerTimeOffset = 0
         seekFrameOffset = targetFrame
         let remainingFrames = AVAudioFrameCount(totalFrames - targetFrame)
 
@@ -186,6 +196,7 @@ final class AudioPlayerService {
             playerNode.play()
         }
         updateNowPlayingPlaybackInfo()
+        scheduleNextTrackGapless(afterGeneration: gen)
     }
 
     func beginSeeking() {
@@ -277,6 +288,7 @@ final class AudioPlayerService {
 
             currentAudioFile = audioFile
             seekFrameOffset = 0
+            playerTimeOffset = 0
 
             // Reconnect with the file's format
             engine.disconnectNodeOutput(playerNode)
@@ -295,6 +307,7 @@ final class AudioPlayerService {
             play()
             updateNowPlayingInfo()
             prefetchUpcoming()
+            scheduleNextTrackGapless(afterGeneration: gen)
         } catch {
             isLoading = false
             isLoadingTrack = false
@@ -467,6 +480,87 @@ final class AudioPlayerService {
         return convertedWAV
     }
 
+    private func scheduleNextTrackGapless(afterGeneration gen: UInt64) {
+        // Clear any previous gapless state
+        nextAudioFile = nil
+        nextTrackIndex = nil
+        isGaplessTransition = false
+
+        guard let cacheService else { return }
+
+        // Determine next index
+        let nextIdx: Int
+        if !userQueue.isEmpty {
+            // User queue tracks can't be pre-scheduled (they modify the queue)
+            return
+        } else if currentIndex < queue.count - 1 {
+            nextIdx = currentIndex + 1
+        } else if repeatMode == .all {
+            nextIdx = 0
+        } else {
+            return
+        }
+
+        let nextTrack = queue[nextIdx]
+
+        Task {
+            do {
+                let fileURL = try await cacheService.cacheTrack(nextTrack)
+
+                // Check generation hasn't changed (user hasn't skipped/seeked)
+                guard gen == scheduleGeneration else { return }
+
+                var audioFile: AVAudioFile
+                do {
+                    audioFile = try AVAudioFile(forReading: fileURL)
+                } catch {
+                    let convertedURL = try await convertToCompatibleFormat(fileURL)
+                    audioFile = try AVAudioFile(forReading: convertedURL)
+                }
+
+                // Check generation again after conversion
+                guard gen == scheduleGeneration else { return }
+
+                // Check format compatibility — must match current format for gapless
+                guard let currentFile = currentAudioFile else { return }
+                let currentFormat = currentFile.processingFormat
+                let nextFormat = audioFile.processingFormat
+
+                guard currentFormat.sampleRate == nextFormat.sampleRate,
+                      currentFormat.channelCount == nextFormat.channelCount else {
+                    // Format mismatch — fall back to normal transition
+                    return
+                }
+
+                // Schedule on the player node — it will play immediately after current segment
+                nextAudioFile = audioFile
+                nextTrackIndex = nextIdx
+                isGaplessTransition = true
+
+                let expectedGen = gen
+                playerNode.scheduleSegment(audioFile, startingFrame: 0, frameCount: AVAudioFrameCount(audioFile.length), at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.isGaplessTransition, expectedGen == self.scheduleGeneration else { return }
+                        self.handleTrackEnd()
+                    }
+                }
+            } catch {
+                // Pre-scheduling failed — normal transition will happen via handleTrackEnd
+            }
+        }
+    }
+
+    private func clearGaplessState() {
+        if isGaplessTransition {
+            // Bump generation by 2 to invalidate both the current track's
+            // and the pre-scheduled next track's completion handlers
+            scheduleGeneration &+= 2
+        }
+        nextAudioFile = nil
+        nextTrackIndex = nil
+        isGaplessTransition = false
+    }
+
     private func prefetchUpcoming() {
         prefetchTask?.cancel()
         prefetchTask = Task {
@@ -534,7 +628,7 @@ final class AudioPlayerService {
               let audioFile = currentAudioFile else { return }
 
         let sampleRate = audioFile.processingFormat.sampleRate
-        let elapsedFrames = playerTime.sampleTime
+        let elapsedFrames = playerTime.sampleTime - playerTimeOffset
         let time = Double(seekFrameOffset + elapsedFrames) / sampleRate
         if time >= 0 && time <= duration {
             currentTime = time
@@ -545,9 +639,37 @@ final class AudioPlayerService {
         if repeatMode == .one {
             seek(to: 0)
             play()
-        } else {
-            next()
+            return
         }
+
+        // If the next track was pre-scheduled gaplessly, just update state
+        if isGaplessTransition, let nextIndex = nextTrackIndex, let nextFile = nextAudioFile {
+            isGaplessTransition = false
+            nextAudioFile = nil
+            nextTrackIndex = nil
+
+            // Capture the current player time so we can offset the time display
+            if let nodeTime = playerNode.lastRenderTime, nodeTime.isSampleTimeValid,
+               let playerTime = playerNode.playerTime(forNodeTime: nodeTime) {
+                playerTimeOffset = playerTime.sampleTime
+            }
+
+            currentIndex = nextIndex
+            currentAudioFile = nextFile
+            seekFrameOffset = 0
+            duration = Double(nextFile.length) / nextFile.processingFormat.sampleRate
+            currentTime = 0
+
+            updateNowPlayingInfo()
+            prefetchUpcoming()
+
+            // Pre-schedule the next-next track
+            let gen = scheduleGeneration
+            scheduleNextTrackGapless(afterGeneration: gen)
+            return
+        }
+
+        next()
     }
 
     private func applyShuffle() {

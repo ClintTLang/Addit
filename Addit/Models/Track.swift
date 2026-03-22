@@ -10,10 +10,11 @@ final class Track {
     var mimeType: String
     var fileSize: Int64?
     var trackNumber: Int
+    var modifiedTime: String?
 
     init(googleFileId: String, name: String, album: Album? = nil,
          durationSeconds: Double? = nil, mimeType: String,
-         fileSize: Int64? = nil, trackNumber: Int) {
+         fileSize: Int64? = nil, trackNumber: Int, modifiedTime: String? = nil) {
         self.googleFileId = googleFileId
         self.name = name
         self.album = album
@@ -21,6 +22,27 @@ final class Track {
         self.mimeType = mimeType
         self.fileSize = fileSize
         self.trackNumber = trackNumber
+        self.modifiedTime = modifiedTime
+    }
+
+    var fileExtension: String {
+        (name as NSString).pathExtension.uppercased()
+    }
+
+    var formattedModifiedDate: String? {
+        guard let modifiedTime else { return nil }
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = isoFormatter.date(from: modifiedTime) ?? {
+            let basic = ISO8601DateFormatter()
+            basic.formatOptions = [.withInternetDateTime]
+            return basic.date(from: modifiedTime)
+        }()
+        guard let date else { return nil }
+        let display = DateFormatter()
+        display.dateStyle = .medium
+        display.timeStyle = .none
+        return display.string(from: date)
     }
 
     var displayName: String {

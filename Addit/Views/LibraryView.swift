@@ -790,7 +790,8 @@ struct AlbumMetadataEditorSheet: View {
                     album: album,
                     mimeType: driveItem.mimeType,
                     fileSize: driveItem.fileSizeBytes,
-                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1
+                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1,
+                    modifiedTime: driveItem.modifiedTime
                 )
                 modelContext.insert(track)
                 reorderedItems.append(.track(track))
@@ -819,7 +820,8 @@ struct AlbumMetadataEditorSheet: View {
                     album: album,
                     mimeType: copiedItem.mimeType,
                     fileSize: copiedItem.fileSizeBytes,
-                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1
+                    trackNumber: reorderedItems.compactMap(\.asTrack).count + 1,
+                    modifiedTime: copiedItem.modifiedTime
                 )
                 modelContext.insert(track)
                 reorderedItems.append(.track(track))

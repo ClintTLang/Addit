@@ -123,7 +123,8 @@ struct AddAlbumView: View {
                 album: album,
                 mimeType: file.mimeType,
                 fileSize: file.fileSizeBytes,
-                trackNumber: index + 1
+                trackNumber: index + 1,
+                modifiedTime: file.modifiedTime
             )
             modelContext.insert(track)
         }

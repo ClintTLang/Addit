@@ -80,6 +80,8 @@ struct AlbumDetailView: View {
                                     Image(uiImage: albumImage)
                                         .resizable()
                                         .scaledToFill()
+                                        .frame(width: coverSize, height: coverSize)
+                                        .clipped()
                                 } else {
                                     Image(systemName: "music.note")
                                         .font(.system(size: 48))
@@ -413,7 +415,8 @@ struct AlbumDetailView: View {
                     album: album,
                     mimeType: file.mimeType,
                     fileSize: file.fileSizeBytes,
-                    trackNumber: index + 1
+                    trackNumber: index + 1,
+                    modifiedTime: file.modifiedTime
                 )
                 modelContext.insert(track)
             }
@@ -422,6 +425,7 @@ struct AlbumDetailView: View {
             for file in driveFiles {
                 if let existing = album.tracks.first(where: { $0.googleFileId == file.id }) {
                     existing.name = file.name
+                    existing.modifiedTime = file.modifiedTime
                     if let size = file.fileSizeBytes {
                         existing.fileSize = size
                     }
@@ -634,6 +638,24 @@ struct TrackRow: View {
             Spacer()
 
             Menu {
+                // File info section
+                Section {
+                    HStack {
+                        if let date = track.formattedModifiedDate {
+                            Text(date)
+                                .font(.system(size: 9))
+                        }
+                        if track.formattedModifiedDate != nil && !track.fileExtension.isEmpty {
+                            Divider()
+                        }
+                        if !track.fileExtension.isEmpty {
+                            Text(track.fileExtension)
+                                .font(.system(size: 9))
+                        }
+                    }
+                    .frame(height: 10)
+                }
+
                 Button {
                     onToggleCache?()
                 } label: {
