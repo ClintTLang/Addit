@@ -3,16 +3,33 @@ import Foundation
 @Observable
 final class AudioCacheService {
     var driveService: GoogleDriveService?
+    var activeAccountId: String?
 
     private let fileManager = FileManager.default
 
     private var cacheDirectory: URL {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let dir = caches.appendingPathComponent("AudioCache", isDirectory: true)
+        let base = caches.appendingPathComponent("AudioCache", isDirectory: true)
+        let dir: URL
+        if let accountId = activeAccountId {
+            dir = base.appendingPathComponent(accountId, isDirectory: true)
+        } else {
+            dir = base
+        }
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
+    }
+
+    /// Clear cache for a specific account
+    func clearCache(for accountId: String) throws {
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = caches.appendingPathComponent("AudioCache", isDirectory: true)
+            .appendingPathComponent(accountId, isDirectory: true)
+        if fileManager.fileExists(atPath: dir.path) {
+            try fileManager.removeItem(at: dir)
+        }
     }
 
     func cachedFileURL(for track: Track) -> URL? {

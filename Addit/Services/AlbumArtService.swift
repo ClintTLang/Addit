@@ -11,6 +11,7 @@ struct AlbumArtResolution {
 @Observable
 final class AlbumArtService {
     var driveService: GoogleDriveService?
+    var activeAccountId: String?
     private(set) var artworkRefreshVersion = 0
     private(set) var lastUpdatedAlbumFolderId: String?
 
@@ -19,11 +20,28 @@ final class AlbumArtService {
 
     private var cacheDirectory: URL {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let dir = caches.appendingPathComponent("AlbumArt", isDirectory: true)
+        let base = caches.appendingPathComponent("AlbumArt", isDirectory: true)
+        let dir: URL
+        if let accountId = activeAccountId {
+            dir = base.appendingPathComponent(accountId, isDirectory: true)
+        } else {
+            dir = base
+        }
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
+    }
+
+    /// Clear cache for a specific account
+    func clearCache(for accountId: String) {
+        memoryCache.removeAllObjects()
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = caches.appendingPathComponent("AlbumArt", isDirectory: true)
+            .appendingPathComponent(accountId, isDirectory: true)
+        if fileManager.fileExists(atPath: dir.path) {
+            try? fileManager.removeItem(at: dir)
+        }
     }
 
     func resolveAlbumArt(for album: Album) async -> AlbumArtResolution {

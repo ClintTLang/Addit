@@ -5,8 +5,12 @@ import GoogleSignIn
 final class GoogleAuthService {
     var isSignedIn = false
     var isRestoringSession = true
+    var isSwitchingAccount = false
     var userName: String?
     var userEmail: String?
+
+    @ObservationIgnored
+    var accountManager = AccountManager()
 
     @ObservationIgnored
     private var currentUser: GIDGoogleUser? {
@@ -24,9 +28,11 @@ final class GoogleAuthService {
             let user = try await GIDSignIn.sharedInstance.restorePreviousSignIn()
             if user.grantedScopes?.contains(Constants.driveScope) == true {
                 currentUser = user
+                registerCurrentUser()
             } else if let presenter = topViewController() {
                 let result = try await user.addScopes([Constants.driveScope], presenting: presenter)
                 currentUser = result.user
+                registerCurrentUser()
             }
         } catch {
             currentUser = nil
@@ -42,9 +48,89 @@ final class GoogleAuthService {
                 additionalScopes: [Constants.driveScope]
             )
             currentUser = result.user
+            registerCurrentUser()
         } catch {
             print("Google Sign-In error: \(error.localizedDescription)")
         }
+    }
+
+    /// Add a new account without losing existing account data
+    func addAccount() async {
+        guard let presenter = topViewController() else { return }
+        do {
+            let result = try await GIDSignIn.sharedInstance.signIn(
+                withPresenting: presenter,
+                hint: nil,
+                additionalScopes: [Constants.driveScope]
+            )
+            currentUser = result.user
+            registerCurrentUser()
+        } catch {
+            // User cancelled — nothing changed, current account stays as-is
+        }
+    }
+
+    /// Switch to a different already-known account
+    func switchAccount(to email: String) async {
+        guard email != userEmail else { return }
+        isSwitchingAccount = true
+
+        // Sign out current session
+        GIDSignIn.sharedInstance.signOut()
+        currentUser = nil
+
+        // Set the desired account as active
+        accountManager.setActiveAccount(email: email)
+
+        // Try to restore — Google SDK may have this session cached
+        do {
+            let user = try await GIDSignIn.sharedInstance.restorePreviousSignIn()
+            if user.profile?.email == email {
+                if user.grantedScopes?.contains(Constants.driveScope) == true {
+                    currentUser = user
+                    isSwitchingAccount = false
+                    return
+                } else if let presenter = topViewController() {
+                    let result = try await user.addScopes([Constants.driveScope], presenting: presenter)
+                    currentUser = result.user
+                    isSwitchingAccount = false
+                    return
+                }
+            }
+        } catch {
+            // Restore didn't work for this account
+        }
+
+        // If restore didn't return the right account, prompt sign-in with hint
+        guard let presenter = topViewController() else {
+            isSwitchingAccount = false
+            return
+        }
+        do {
+            let result = try await GIDSignIn.sharedInstance.signIn(
+                withPresenting: presenter,
+                hint: email,
+                additionalScopes: [Constants.driveScope]
+            )
+            currentUser = result.user
+            if let resultEmail = result.user.profile?.email {
+                accountManager.setActiveAccount(email: resultEmail)
+            }
+        } catch {
+            print("Switch account error: \(error.localizedDescription)")
+            // Try to restore whatever was signed in before
+            await restorePreviousSignIn()
+        }
+        isSwitchingAccount = false
+    }
+
+    /// Sign out and remove a specific account
+    func removeAccount(email: String) {
+        if email == userEmail {
+            GIDSignIn.sharedInstance.signOut()
+            currentUser = nil
+        }
+        accountManager.removeAccount(email: email)
     }
 
     func signOut() {
@@ -60,6 +146,13 @@ final class GoogleAuthService {
             try await user.refreshTokensIfNeeded()
         }
         return user.accessToken.tokenString
+    }
+
+    private func registerCurrentUser() {
+        guard let email = currentUser?.profile?.email,
+              let name = currentUser?.profile?.name else { return }
+        let photoURL = currentUser?.profile?.imageURL(withDimension: 120)
+        accountManager.addAccount(email: email, name: name, photoURL: photoURL)
     }
 
     private func topViewController() -> UIViewController? {

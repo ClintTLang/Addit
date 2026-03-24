@@ -8,7 +8,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if authService.isRestoringSession {
+            if authService.isRestoringSession || authService.isSwitchingAccount {
                 VStack(spacing: 16) {
                     ProgressView()
                         .controlSize(.large)

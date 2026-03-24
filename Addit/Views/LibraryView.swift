@@ -161,17 +161,42 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
-                        if let name = authService.userName {
-                            Text(name)
+                        // Account list
+                        Section {
+                            ForEach(authService.accountManager.accounts) { account in
+                                Button {
+                                    if account.email != authService.userEmail {
+                                        Task { await authService.switchAccount(to: account.email) }
+                                    }
+                                } label: {
+                                    Label {
+                                        Text(account.name)
+                                    } icon: {
+                                        if account.email == authService.userEmail {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            }
+                            Button {
+                                Task { await authService.addAccount() }
+                            } label: {
+                                Label("Add Account", systemImage: "plus")
+                            }
                         }
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Text("Settings")
+
+                        Section {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "gearshape")
+                            }
                         }
-                        .tint(.secondary)
-                        Button("Sign Out", role: .destructive) {
-                            signOutAndClearData()
+
+                        Section {
+                            Button("Sign Out", role: .destructive) {
+                                signOutAndClearData()
+                            }
                         }
                     } label: {
                         Image(systemName: "person.crop.circle")
@@ -214,24 +239,36 @@ struct LibraryView: View {
     }
 
     private func signOutAndClearData() {
+        guard let email = authService.userEmail else { return }
+        let accountId = AccountManager.storageIdentifier(for: email)
+
         // Stop playback
         playerService.pause()
         playerService.queue.removeAll()
         playerService.userQueue.removeAll()
         playerService.currentIndex = 0
 
-        // Delete all albums and tracks from SwiftData
+        // Delete all albums and tracks from SwiftData for this account
         for album in albums {
             modelContext.delete(album)
         }
         try? modelContext.save()
 
-        // Clear caches
-        try? cacheService.clearCache()
-        albumArtService.clearCache()
+        // Clear this account's caches
+        try? cacheService.clearCache(for: accountId)
+        albumArtService.clearCache(for: accountId)
 
-        // Sign out
-        authService.signOut()
+        // Remove the data store for this account
+        AccountContainerView.removeStore(for: email)
+
+        // Remove account and sign out
+        let remainingAccounts = authService.accountManager.accounts.filter { $0.email != email }
+        authService.removeAccount(email: email)
+
+        // If there are other accounts, switch to the first one
+        if let next = remainingAccounts.first {
+            Task { await authService.switchAccount(to: next.email) }
+        }
     }
 
 }

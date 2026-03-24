@@ -138,6 +138,7 @@ struct AddAlbumView: View {
                 try? modelContext.save()
 
                 await initializeAdditData(for: album, audioFiles: audioFiles)
+                await loadAdditMetadata(for: album)
                 if album.isFolderOwner {
                     await claimCoverOwnership(for: album)
                 }
@@ -181,6 +182,21 @@ struct AddAlbumView: View {
             )
         } catch {
             // Best effort — will be created on next sync or edit
+        }
+    }
+
+    private func loadAdditMetadata(for album: Album) async {
+        do {
+            guard let additData = try await driveService.findFile(named: ".addit-data", inFolder: album.googleFolderId) else { return }
+            let data = try await driveService.downloadFileData(fileId: additData.id)
+            let metadata = try JSONDecoder().decode(AdditMetadata.self, from: data)
+            if let artist = metadata.artist, !artist.isEmpty {
+                album.artistName = artist
+            }
+            album.additDataFileId = additData.id
+            try? modelContext.save()
+        } catch {
+            // Best effort
         }
     }
 
