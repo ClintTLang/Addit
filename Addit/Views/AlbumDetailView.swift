@@ -20,6 +20,8 @@ struct AlbumDetailView: View {
     @State private var displayItems: [TracklistItem] = []
     @State private var showToolbarActions = false
     @State private var toolbarActionGeneration = 0
+    @State private var shareFileURL: URL?
+    @State private var isDownloadingAlbum = false
 
     private let coverSize: CGFloat = 200
 
@@ -135,6 +137,9 @@ struct AlbumDetailView: View {
                                 isCached: cachedTrackIds.contains(track.googleFileId),
                                 onToggleCache: {
                                     toggleCache(for: track)
+                                },
+                                onDownload: {
+                                    downloadAndShare(track: track)
                                 }
                             )
                             .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
@@ -195,18 +200,8 @@ struct AlbumDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    toolbarActionGeneration += 1
-                    let gen = toolbarActionGeneration
                     withAnimation(.easeOut(duration: 0.2)) {
-                        showToolbarActions = true
-                    }
-                    Task {
-                        try? await Task.sleep(for: .seconds(5))
-                        if toolbarActionGeneration == gen {
-                            withAnimation(.easeIn(duration: 0.2)) {
-                                showToolbarActions = false
-                            }
-                        }
+                        showToolbarActions.toggle()
                     }
                 } label: {
                     Label("More", systemImage: "ellipsis")
@@ -278,6 +273,18 @@ struct AlbumDetailView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+
+                    Divider()
+
+                    Button {
+                        downloadAlbumAsZip()
+                        withAnimation { showToolbarActions = false }
+                    } label: {
+                        Label("Download", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
                 .frame(width: 230)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -291,6 +298,14 @@ struct AlbumDetailView: View {
         }
         .navigationDestination(isPresented: $navigateToChat) {
             ChatView(album: album)
+        }
+        .sheet(isPresented: Binding(
+            get: { shareFileURL != nil },
+            set: { if !$0 { shareFileURL = nil } }
+        )) {
+            if let url = shareFileURL {
+                ShareSheet(activityItems: [url])
+            }
         }
         .sheet(isPresented: $showEditSheet, onDismiss: {
             Task { await syncFromDrive() }
@@ -368,6 +383,97 @@ struct AlbumDetailView: View {
                 } catch {
                     // Download failed silently
                 }
+            }
+        }
+    }
+
+    private func downloadAlbumAsZip() {
+        guard !isDownloadingAlbum else { return }
+        isDownloadingAlbum = true
+        Task {
+            defer { isDownloadingAlbum = false }
+            do {
+                let fm = FileManager.default
+                let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                let albumDir = tempDir.appendingPathComponent(album.name)
+                try fm.createDirectory(at: albumDir, withIntermediateDirectories: true)
+
+                // Download all tracks
+                for track in sortedTracks {
+                    let fileURL = try await cacheService.cacheTrack(track)
+                    cachedTrackIds.insert(track.googleFileId)
+                    let destination = albumDir.appendingPathComponent(track.name)
+                    try fm.copyItem(at: fileURL, to: destination)
+                }
+
+                // Download cover if present
+                if let coverFileId = album.coverFileId {
+                    let coverData = try await driveService.downloadFileData(fileId: coverFileId)
+                    let ext: String
+                    switch album.coverMimeType {
+                    case "image/png": ext = "png"
+                    case "image/gif": ext = "gif"
+                    case "image/webp": ext = "webp"
+                    default: ext = "jpg"
+                    }
+                    let coverURL = albumDir.appendingPathComponent("cover.\(ext)")
+                    try coverData.write(to: coverURL)
+                }
+
+                // Download addit-data if present
+                if let additDataId = album.additDataFileId {
+                    let additData = try await driveService.downloadFileData(fileId: additDataId)
+                    let additURL = albumDir.appendingPathComponent(".addit-data")
+                    try additData.write(to: additURL)
+                }
+
+                // Create zip using FileManager's built-in support (NSFileCoordinator)
+                let zipURL = tempDir.appendingPathComponent("\(album.name).zip")
+                let coordinator = NSFileCoordinator()
+                var coordinatorError: NSError?
+                var resultURL: URL?
+
+                coordinator.coordinate(readingItemAt: albumDir, options: .forUploading, error: &coordinatorError) { tempZipURL in
+                    do {
+                        try fm.copyItem(at: tempZipURL, to: zipURL)
+                        resultURL = zipURL
+                    } catch {
+                        print("Failed to copy zip: \(error)")
+                    }
+                }
+
+                if let error = coordinatorError {
+                    throw error
+                }
+
+                if let zipURL = resultURL {
+                    shareFileURL = zipURL
+                }
+
+                // Clean up the unzipped folder
+                try? fm.removeItem(at: albumDir)
+            } catch {
+                print("Failed to create album zip: \(error)")
+            }
+        }
+    }
+
+    private func downloadAndShare(track: Track) {
+        Task {
+            do {
+                let fileURL = try await cacheService.cacheTrack(track)
+                cachedTrackIds.insert(track.googleFileId)
+                // Copy to temp directory with the original filename so the share sheet shows the proper name
+                let tempDir = FileManager.default.temporaryDirectory
+                let destination = tempDir.appendingPathComponent(track.displayName + "." + track.fileExtension)
+                let fm = FileManager.default
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.copyItem(at: fileURL, to: destination)
+                shareFileURL = destination
+            } catch {
+                print("Failed to download track for sharing: \(error)")
             }
         }
     }
@@ -598,6 +704,7 @@ struct TrackRow: View {
     let isPlaying: Bool
     let isCached: Bool
     var onToggleCache: (() -> Void)?
+    var onDownload: (() -> Void)?
     @Environment(ThemeService.self) private var themeService
 
     var body: some View {
@@ -656,6 +763,12 @@ struct TrackRow: View {
                 }
 
                 Button {
+                    onDownload?()
+                } label: {
+                    Label("Download", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
                     onToggleCache?()
                 } label: {
                     if isCached {
@@ -694,4 +807,14 @@ struct DiscMarkerRow: View {
         }
         .padding(.vertical, 4)
     }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

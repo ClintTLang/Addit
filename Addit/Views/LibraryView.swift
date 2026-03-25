@@ -18,6 +18,8 @@ struct LibraryView: View {
     @State private var metadataEditorAlbum: Album?
     @State private var isArranging = false
     @AppStorage("libraryViewMode") private var isListMode = false
+    @State private var accountToSignOut: String?
+    @State private var showSignOutConfirmation = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -164,9 +166,19 @@ struct LibraryView: View {
                         // Account list
                         Section {
                             ForEach(authService.accountManager.accounts) { account in
-                                Button {
+                                Menu {
                                     if account.email != authService.userEmail {
-                                        Task { await authService.switchAccount(to: account.email) }
+                                        Button {
+                                            Task { await authService.switchAccount(to: account.email) }
+                                        } label: {
+                                            Label("Switch to", systemImage: "arrow.right.arrow.left")
+                                        }
+                                    }
+                                    Button(role: .destructive) {
+                                        accountToSignOut = account.email
+                                        showSignOutConfirmation = true
+                                    } label: {
+                                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                                     }
                                 } label: {
                                     Label {
@@ -192,12 +204,6 @@ struct LibraryView: View {
                                 Label("Settings", systemImage: "gearshape")
                             }
                         }
-
-                        Section {
-                            Button("Sign Out", role: .destructive) {
-                                signOutAndClearData()
-                            }
-                        }
                     } label: {
                         Image(systemName: "person.crop.circle")
                     }
@@ -217,6 +223,16 @@ struct LibraryView: View {
         }
         .sheet(item: $metadataEditorAlbum) { album in
             AlbumMetadataEditorSheet(album: album)
+        }
+        .alert("Are you sure?", isPresented: $showSignOutConfirmation) {
+            Button("Sign Out", role: .destructive) {
+                if let email = accountToSignOut {
+                    signOutAndClearData(for: email)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Your library and downloads for this account will be erased, but no Google Drive data will be modified.")
         }
         .task {
             initializeDisplayOrder()
@@ -238,35 +254,39 @@ struct LibraryView: View {
         try? modelContext.save()
     }
 
-    private func signOutAndClearData() {
-        guard let email = authService.userEmail else { return }
-        let accountId = AccountManager.storageIdentifier(for: email)
+    private func signOutAndClearData(for email: String? = nil) {
+        let targetEmail = email ?? authService.userEmail
+        guard let targetEmail else { return }
+        let isCurrentAccount = targetEmail == authService.userEmail
+        let accountId = AccountManager.storageIdentifier(for: targetEmail)
 
-        // Stop playback
-        playerService.pause()
-        playerService.queue.removeAll()
-        playerService.userQueue.removeAll()
-        playerService.currentIndex = 0
+        if isCurrentAccount {
+            // Stop playback if signing out the active account
+            playerService.pause()
+            playerService.queue.removeAll()
+            playerService.userQueue.removeAll()
+            playerService.currentIndex = 0
 
-        // Delete all albums and tracks from SwiftData for this account
-        for album in albums {
-            modelContext.delete(album)
+            // Delete all albums and tracks from SwiftData for this account
+            for album in albums {
+                modelContext.delete(album)
+            }
+            try? modelContext.save()
         }
-        try? modelContext.save()
 
         // Clear this account's caches
         try? cacheService.clearCache(for: accountId)
         albumArtService.clearCache(for: accountId)
 
         // Remove the data store for this account
-        AccountContainerView.removeStore(for: email)
+        AccountContainerView.removeStore(for: targetEmail)
 
         // Remove account and sign out
-        let remainingAccounts = authService.accountManager.accounts.filter { $0.email != email }
-        authService.removeAccount(email: email)
+        let remainingAccounts = authService.accountManager.accounts.filter { $0.email != targetEmail }
+        authService.removeAccount(email: targetEmail)
 
-        // If there are other accounts, switch to the first one
-        if let next = remainingAccounts.first {
+        // If we signed out the current account, switch to the next one
+        if isCurrentAccount, let next = remainingAccounts.first {
             Task { await authService.switchAccount(to: next.email) }
         }
     }
