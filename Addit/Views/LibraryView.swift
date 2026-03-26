@@ -302,19 +302,26 @@ struct AlbumCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             AlbumArtworkThumbnail(album: album)
 
-            Text(album.name)
-                .font(.subheadline.bold())
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(album.name)
+                    .font(.subheadline.bold())
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(.primary)
 
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(subtitle)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 36, alignment: .top)
         }
+        .frame(width: 148)
     }
 }
 
