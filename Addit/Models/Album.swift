@@ -1,6 +1,11 @@
 import Foundation
 import SwiftData
 
+enum StorageSource: String, Codable {
+    case googleDrive
+    case localStorage
+}
+
 @Model
 final class Album {
     @Attribute(.unique) var googleFolderId: String
@@ -17,6 +22,13 @@ final class Album {
     var displayOrder: Int = 0
     var cachedTracklist: [String] = []
     var additDataFileId: String?
+    var storageSourceRaw: String? = StorageSource.googleDrive.rawValue
+    var localCoverPath: String?
+
+    var storageSource: StorageSource {
+        get { StorageSource(rawValue: storageSourceRaw ?? "") ?? .googleDrive }
+        set { storageSourceRaw = newValue.rawValue }
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \Track.album)
     var tracks: [Track] = []
@@ -32,7 +44,8 @@ final class Album {
         dateAdded: Date = .now,
         canEdit: Bool = false,
         isFolderOwner: Bool = false,
-        displayOrder: Int = 0
+        displayOrder: Int = 0,
+        storageSource: StorageSource = .googleDrive
     ) {
         self.googleFolderId = googleFolderId
         self.name = name
@@ -45,7 +58,10 @@ final class Album {
         self.canEdit = canEdit
         self.isFolderOwner = isFolderOwner
         self.displayOrder = displayOrder
+        self.storageSourceRaw = storageSource.rawValue
     }
+
+    var isLocal: Bool { storageSource == .localStorage }
 
     var coverArtTaskID: String {
         return "\(coverFileId ?? "none")-\(coverModifiedTime ?? "unknown")"

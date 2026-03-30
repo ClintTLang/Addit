@@ -21,28 +21,70 @@ struct LibraryView: View {
     @State private var accountToSignOut: String?
     @State private var showSignOutConfirmation = false
     @State private var searchText = ""
+    @State private var isSearchExpanded = false
+    @FocusState private var isSearchFocused: Bool
+    @AppStorage("storageSource") private var storageSource: String = StorageSource.googleDrive.rawValue
+    @State private var showLocalImporter = false
+    @State private var isImportingLocal = false
+
+    private var currentSource: StorageSource {
+        StorageSource(rawValue: storageSource) ?? .googleDrive
+    }
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
+    private var sourceAlbums: [Album] {
+        albums.filter { $0.storageSource == currentSource }
+    }
+
     private var filteredAlbums: [Album] {
-        if searchText.isEmpty { return albums }
+        let source = sourceAlbums
+        if searchText.isEmpty { return source }
         let query = searchText.lowercased()
-        return albums.filter {
+        return source.filter {
             $0.name.lowercased().contains(query) ||
             ($0.artistName?.lowercased().contains(query) ?? false)
         }
     }
 
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search albums", text: $searchText)
+                .focused($isSearchFocused)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
     var body: some View {
         Group {
             if !searchText.isEmpty && filteredAlbums.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-            } else if albums.isEmpty {
+                VStack(spacing: 0) {
+                    if isSearchExpanded { searchBar }
+                    ContentUnavailableView.search(text: searchText)
+                }
+            } else if sourceAlbums.isEmpty {
                 ScrollView {
                     ContentUnavailableView(
                         "No Albums Yet",
                         systemImage: "music.note.list",
-                        description: Text("Tap + to add folders from Google Drive")
+                        description: Text(currentSource == .googleDrive
+                            ? "Tap + to add folders from Google Drive"
+                            : "Tap + to import audio from your iPhone")
                     )
                     .padding(.top, 100)
                 }
@@ -108,9 +150,14 @@ struct LibraryView: View {
                     }
                 }
                 .listStyle(.plain)
+                .safeAreaInset(edge: .top) {
+                    if isSearchExpanded { searchBar }
+                }
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 16) {
+                    VStack(spacing: 0) {
+                        if isSearchExpanded { searchBar }
+                        LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(filteredAlbums) { album in
                             NavigationLink(value: album) {
                                 AlbumCard(album: album)
@@ -134,11 +181,46 @@ struct LibraryView: View {
                         }
                     }
                     .padding()
+                    }
                 }
             }
         }
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search albums")
-        .navigationTitle(isArranging ? "Arrange Library" : "Library")
+        .navigationTitle(isArranging ? "Arrange Library" : "")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !isArranging {
+                ToolbarItem(placement: .principal) {
+                    Menu {
+                        Button {
+                            storageSource = StorageSource.googleDrive.rawValue
+                        } label: {
+                            if currentSource == .googleDrive {
+                                Label("Google Drive", systemImage: "checkmark")
+                            } else {
+                                Text("Google Drive")
+                            }
+                        }
+                        Button {
+                            storageSource = StorageSource.localStorage.rawValue
+                        } label: {
+                            if currentSource == .localStorage {
+                                Label("iPhone Storage", systemImage: "checkmark")
+                            } else {
+                                Text("iPhone Storage")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(currentSource == .googleDrive ? "Google Drive" : "iPhone Storage")
+                                .font(.headline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+            }
+        }
         .navigationDestination(for: Album.self) { album in
             AlbumDetailView(album: album)
         }
@@ -154,26 +236,48 @@ struct LibraryView: View {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 16) {
                         Button {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                isSearchExpanded.toggle()
+                                if !isSearchExpanded {
+                                    searchText = ""
+                                    isSearchFocused = false
+                                } else {
+                                    isSearchFocused = true
+                                }
+                            }
+                        } label: {
+                            Image(systemName: isSearchExpanded ? "xmark" : "magnifyingglass")
+                        }
+                        Button {
                             withAnimation { isListMode.toggle() }
                         } label: {
                             Image(systemName: isListMode ? "square.grid.2x2" : "list.bullet")
                         }
-                        Menu {
-                            Button {
-                                showAddAlbum = true
+                        if currentSource == .googleDrive {
+                            Menu {
+                                Button {
+                                    showAddAlbum = true
+                                } label: {
+                                    Label("Add Existing", systemImage: "folder.badge.plus")
+                                }
+                                Button {
+                                    showCreateAlbum = true
+                                } label: {
+                                    Label("Create New", systemImage: "plus.rectangle.on.folder")
+                                }
                             } label: {
-                                Label("Add Existing", systemImage: "folder.badge.plus")
+                                Image(systemName: "plus")
                             }
+                        } else {
                             Button {
-                                showCreateAlbum = true
+                                showLocalImporter = true
                             } label: {
-                                Label("Create New", systemImage: "plus.rectangle.on.folder")
+                                Image(systemName: "plus")
                             }
-                        } label: {
-                            Image(systemName: "plus")
                         }
                     }
                 }
+                if currentSource == .googleDrive {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
                         // Account list
@@ -221,6 +325,7 @@ struct LibraryView: View {
                         Image(systemName: "person.crop.circle")
                     }
                 }
+                }
             }
         }
         .sheet(isPresented: $showAddAlbum) {
@@ -236,6 +341,24 @@ struct LibraryView: View {
         }
         .sheet(item: $metadataEditorAlbum) { album in
             AlbumMetadataEditorSheet(album: album)
+        }
+        .fileImporter(
+            isPresented: $showLocalImporter,
+            allowedContentTypes: [.audio, .folder],
+            allowsMultipleSelection: true
+        ) { result in
+            Task { await handleLocalImport(result) }
+        }
+        .overlay {
+            if isImportingLocal {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .overlay {
+                        ProgressView("Importing...")
+                            .padding(24)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+            }
         }
         .alert("Are you sure?", isPresented: $showSignOutConfirmation) {
             Button("Sign Out", role: .destructive) {
@@ -254,6 +377,115 @@ struct LibraryView: View {
             if playerService.currentTrack != nil {
                 Color.clear.frame(height: 64)
             }
+        }
+    }
+
+    private func handleLocalImport(_ result: Result<[URL], Error>) async {
+        guard case .success(let urls) = result, !urls.isEmpty else { return }
+
+        await MainActor.run { isImportingLocal = true }
+
+        let fm = FileManager.default
+        let localBase = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LocalAlbums", isDirectory: true)
+        try? fm.createDirectory(at: localBase, withIntermediateDirectories: true)
+
+        let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aac", "aiff", "flac", "alac", "ogg", "wma", "caf"]
+
+        // Collect audio files — if a folder was selected, scan it; otherwise use files directly
+        var audioFilesByAlbum: [(albumName: String, files: [URL])] = []
+
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: url.path, isDirectory: &isDir)
+
+            if isDir.boolValue {
+                // Folder selected — treat as one album
+                let folderName = url.lastPathComponent
+                let contents = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+                let audioFiles = contents.filter { audioExtensions.contains($0.pathExtension.lowercased()) }
+                    .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+                if !audioFiles.isEmpty {
+                    audioFilesByAlbum.append((albumName: folderName, files: audioFiles))
+                }
+            } else if audioExtensions.contains(url.pathExtension.lowercased()) {
+                // Individual files — group into one album
+                audioFilesByAlbum.append((albumName: url.deletingPathExtension().lastPathComponent, files: [url]))
+            }
+        }
+
+        // Merge individual files selected together into one album if multiple
+        let singleFiles = audioFilesByAlbum.filter { $0.files.count == 1 && !urls.contains(where: { u in
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: u.path, isDirectory: &isDir)
+            return isDir.boolValue
+        })}
+        if singleFiles.count > 1 {
+            let merged = singleFiles.flatMap { $0.files }
+            audioFilesByAlbum.removeAll { $0.files.count == 1 }
+            audioFilesByAlbum.append((albumName: "Imported Album", files: merged))
+        }
+
+        for (albumName, files) in audioFilesByAlbum {
+            let albumId = UUID().uuidString
+            let albumDir = localBase.appendingPathComponent(albumId, isDirectory: true)
+            try? fm.createDirectory(at: albumDir, withIntermediateDirectories: true)
+
+            let album = Album(
+                googleFolderId: "local_\(albumId)",
+                name: albumName,
+                trackCount: files.count,
+                dateAdded: .now,
+                canEdit: true,
+                isFolderOwner: true,
+                displayOrder: (albums.map(\.displayOrder).max() ?? 0) + 1,
+                storageSource: .localStorage
+            )
+            modelContext.insert(album)
+
+            for (index, fileURL) in files.enumerated() {
+                let fileName = fileURL.lastPathComponent
+                let destURL = albumDir.appendingPathComponent(fileName)
+
+                // Copy file to app's local storage
+                if !fm.fileExists(atPath: destURL.path) {
+                    try? fm.copyItem(at: fileURL, to: destURL)
+                }
+
+                let fileSize = (try? fm.attributesOfItem(atPath: destURL.path)[.size] as? Int64) ?? 0
+                let mimeType = mimeTypeForExtension(destURL.pathExtension)
+
+                let track = Track(
+                    googleFileId: "local_\(UUID().uuidString)",
+                    name: fileName,
+                    album: album,
+                    mimeType: mimeType,
+                    fileSize: fileSize,
+                    trackNumber: index + 1,
+                    localFilePath: destURL.path
+                )
+                modelContext.insert(track)
+            }
+        }
+
+        try? modelContext.save()
+        await MainActor.run { isImportingLocal = false }
+    }
+
+    private func mimeTypeForExtension(_ ext: String) -> String {
+        switch ext.lowercased() {
+        case "mp3": return "audio/mpeg"
+        case "m4a": return "audio/mp4"
+        case "wav": return "audio/wav"
+        case "aac": return "audio/aac"
+        case "aiff", "aif": return "audio/aiff"
+        case "flac": return "audio/flac"
+        case "ogg": return "audio/ogg"
+        case "caf": return "audio/x-caf"
+        default: return "audio/mpeg"
         }
     }
 
@@ -465,6 +697,17 @@ struct AlbumMetadataEditorSheet: View {
                             switch item {
                             case .track(let track):
                                 HStack(spacing: 6) {
+                                    if album.canEdit {
+                                        Button {
+                                            trackToDelete = track
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .font(.caption)
+                                                .foregroundStyle(.red)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
                                     TextField(
                                         track.displayName,
                                         text: Binding(
@@ -479,17 +722,6 @@ struct AlbumMetadataEditorSheet: View {
                                     Image(systemName: "pencil")
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
-
-                                    if album.canEdit {
-                                        Button {
-                                            trackToDelete = track
-                                        } label: {
-                                            Image(systemName: "trash")
-                                                .font(.caption)
-                                                .foregroundStyle(.red)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
                                 }
                             case .discMarker:
                                 let discNumber = reorderedItems[0...index].filter(\.isDiscMarker).count
@@ -663,6 +895,33 @@ struct AlbumMetadataEditorSheet: View {
         let trimmedArtist = editedArtist.trimmingCharacters(in: .whitespacesAndNewlines)
         let newArtist: String? = trimmedArtist.isEmpty ? nil : trimmedArtist
 
+        if album.isLocal {
+            // Local album — just update SwiftData, rename files on disk
+            album.name = trimmedTitle
+            album.artistName = newArtist
+
+            // Update track names and numbers
+            let allTracks = reorderedItems.compactMap(\.asTrack)
+            for (index, track) in allTracks.enumerated() {
+                if let newName = editedTrackNames[track.googleFileId], newName != track.name {
+                    // Rename file on disk
+                    if let oldPath = track.localFilePath {
+                        let oldURL = URL(fileURLWithPath: oldPath)
+                        let ext = oldURL.pathExtension
+                        let newFileName = newName.hasSuffix(".\(ext)") ? newName : "\(newName).\(ext)"
+                        let newURL = oldURL.deletingLastPathComponent().appendingPathComponent(newFileName)
+                        try? FileManager.default.moveItem(at: oldURL, to: newURL)
+                        track.localFilePath = newURL.path
+                        track.name = newFileName
+                    }
+                }
+                track.trackNumber = index + 1
+            }
+            try? modelContext.save()
+            dismiss()
+            return
+        }
+
         // Snapshot current state for rollback
         let previousName = album.name
         let previousArtist = album.artistName
@@ -709,6 +968,21 @@ struct AlbumMetadataEditorSheet: View {
 
         isUploadingCover = true
         defer { isUploadingCover = false }
+
+        if album.isLocal {
+            // Save cover locally
+            guard let jpegData = croppedImage.jpegData(compressionQuality: 0.9) else { return }
+            let albumId = album.googleFolderId.replacingOccurrences(of: "local_", with: "")
+            let localBase = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("LocalAlbums", isDirectory: true)
+                .appendingPathComponent(albumId, isDirectory: true)
+            try? FileManager.default.createDirectory(at: localBase, withIntermediateDirectories: true)
+            let coverURL = localBase.appendingPathComponent("cover.jpg")
+            try? jpegData.write(to: coverURL)
+            album.localCoverPath = coverURL.path
+            try? modelContext.save()
+            return
+        }
 
         do {
             guard let jpegData = croppedImage.jpegData(compressionQuality: 0.9) else {
@@ -1050,12 +1324,19 @@ struct AlbumArtworkThumbnail: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .onAppear {
-                // Show cached image instantly — no async, no file I/O
-                if image == nil, let coverFileId = album.coverFileId {
-                    image = albumArtService.cachedImage(for: coverFileId)
+                if album.isLocal {
+                    if image == nil, let coverPath = album.localCoverPath {
+                        image = UIImage(contentsOfFile: coverPath)
+                    }
+                } else {
+                    // Show cached image instantly — no async, no file I/O
+                    if image == nil, let coverFileId = album.coverFileId {
+                        image = albumArtService.cachedImage(for: coverFileId)
+                    }
                 }
             }
             .task(id: artworkTaskID) {
+                guard !album.isLocal else { return }
                 // Resolve fully (disk cache + network) in background
                 let resolution = await albumArtService.resolveAlbumArt(for: album)
                 if resolution.image != nil || image == nil {

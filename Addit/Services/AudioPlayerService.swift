@@ -262,7 +262,7 @@ final class AudioPlayerService {
     }
 
     private func loadAndPlay() async {
-        guard let track = currentTrack, let cacheService else { return }
+        guard let track = currentTrack else { return }
 
         isLoadingTrack = true
         isLoading = true
@@ -274,7 +274,13 @@ final class AudioPlayerService {
         playerNode.stop()
 
         do {
-            let fileURL = try await cacheService.cacheTrack(track)
+            let fileURL: URL
+            if let localURL = track.localFileURL {
+                fileURL = localURL
+            } else {
+                guard let cacheService else { throw NSError(domain: "AudioPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cache service not available"]) }
+                fileURL = try await cacheService.cacheTrack(track)
+            }
 
             var audioFile: AVAudioFile
             do {
@@ -486,8 +492,6 @@ final class AudioPlayerService {
         nextTrackIndex = nil
         isGaplessTransition = false
 
-        guard let cacheService else { return }
-
         // Determine next index
         let nextIdx: Int
         if !userQueue.isEmpty {
@@ -505,7 +509,13 @@ final class AudioPlayerService {
 
         Task {
             do {
-                let fileURL = try await cacheService.cacheTrack(nextTrack)
+                let fileURL: URL
+                if let localURL = nextTrack.localFileURL {
+                    fileURL = localURL
+                } else {
+                    guard let cs = self.cacheService else { return }
+                    fileURL = try await cs.cacheTrack(nextTrack)
+                }
 
                 // Check generation hasn't changed (user hasn't skipped/seeked)
                 guard gen == scheduleGeneration else { return }
@@ -575,6 +585,7 @@ final class AudioPlayerService {
 
             for track in tracksToPrefetch {
                 guard !Task.isCancelled else { return }
+                if track.isLocal { continue } // Local tracks don't need prefetching
                 do {
                     _ = try await cacheService.cacheTrack(track)
                 } catch {}

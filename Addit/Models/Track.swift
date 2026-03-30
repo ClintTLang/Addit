@@ -11,10 +11,12 @@ final class Track {
     var fileSize: Int64?
     var trackNumber: Int
     var modifiedTime: String?
+    var localFilePath: String?
 
     init(googleFileId: String, name: String, album: Album? = nil,
          durationSeconds: Double? = nil, mimeType: String,
-         fileSize: Int64? = nil, trackNumber: Int, modifiedTime: String? = nil) {
+         fileSize: Int64? = nil, trackNumber: Int, modifiedTime: String? = nil,
+         localFilePath: String? = nil) {
         self.googleFileId = googleFileId
         self.name = name
         self.album = album
@@ -23,6 +25,14 @@ final class Track {
         self.fileSize = fileSize
         self.trackNumber = trackNumber
         self.modifiedTime = modifiedTime
+        self.localFilePath = localFilePath
+    }
+
+    var isLocal: Bool { localFilePath != nil }
+
+    var localFileURL: URL? {
+        guard let localFilePath else { return nil }
+        return URL(fileURLWithPath: localFilePath)
     }
 
     var fileExtension: String {

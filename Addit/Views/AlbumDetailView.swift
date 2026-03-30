@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct AlbumDetailView: View {
     let album: Album
@@ -134,7 +135,8 @@ struct AlbumDetailView: View {
                                 number: trackNumbers[track.googleFileId] ?? 0,
                                 isCurrentTrack: playerService.currentTrack?.googleFileId == track.googleFileId,
                                 isPlaying: playerService.currentTrack?.googleFileId == track.googleFileId && playerService.isPlaying,
-                                isCached: cachedTrackIds.contains(track.googleFileId),
+                                isCached: track.isLocal || cachedTrackIds.contains(track.googleFileId),
+                                isLocal: album.isLocal,
                                 onToggleCache: {
                                     toggleCache(for: track)
                                 },
@@ -195,7 +197,7 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        .navigationTitle(album.name)
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -225,29 +227,31 @@ struct AlbumDetailView: View {
         .overlay(alignment: .topTrailing) {
             if showToolbarActions {
                 VStack(alignment: .trailing, spacing: 0) {
-                    Button {
-                        showSharingSheet = true
-                        withAnimation { showToolbarActions = false }
-                    } label: {
-                        Label("Sharing", systemImage: "person.2")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if !album.isLocal {
+                        Button {
+                            showSharingSheet = true
+                            withAnimation { showToolbarActions = false }
+                        } label: {
+                            Label("Sharing", systemImage: "person.2")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+
+                        Divider()
+
+                        Button {
+                            navigateToChat = true
+                            withAnimation { showToolbarActions = false }
+                        } label: {
+                            Label("Chat", systemImage: "bubble.left")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+
+                        Divider()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-
-                    Divider()
-
-                    Button {
-                        navigateToChat = true
-                        withAnimation { showToolbarActions = false }
-                    } label: {
-                        Label("Chat", systemImage: "bubble.left")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-
-                    Divider()
 
                     Button {
                         showEditSheet = true
@@ -259,20 +263,22 @@ struct AlbumDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
 
-                    Divider()
+                    if !album.isLocal {
+                        Divider()
 
-                    Button {
-                        toggleAllCache()
-                        withAnimation { showToolbarActions = false }
-                    } label: {
-                        Label(
-                            allTracksCached ? "Remove Offline Access" : "Make Available Offline",
-                            systemImage: allTracksCached ? "xmark.circle" : "arrow.down.circle"
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            toggleAllCache()
+                            withAnimation { showToolbarActions = false }
+                        } label: {
+                            Label(
+                                allTracksCached ? "Remove Offline Access" : "Make Available Offline",
+                                systemImage: allTracksCached ? "xmark.circle" : "arrow.down.circle"
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
 
                     Divider()
 
@@ -316,7 +322,12 @@ struct AlbumDetailView: View {
             await syncFromDrive()
         }
         .task {
-            await syncFromDrive()
+            if album.isLocal {
+                isSyncing = false
+                buildDisplayItems(from: nil)
+            } else {
+                await syncFromDrive()
+            }
             refreshCachedState()
         }
         .onChange(of: playerService.currentTrack?.googleFileId) {
@@ -326,9 +337,15 @@ struct AlbumDetailView: View {
             refreshCachedState()
         }
         .task(id: artworkTaskID) {
-            let resolution = await albumArtService.resolveAlbumArt(for: album)
-            albumImage = resolution.image
-            albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
+            if album.isLocal {
+                if let coverPath = album.localCoverPath {
+                    albumImage = UIImage(contentsOfFile: coverPath)
+                }
+            } else {
+                let resolution = await albumArtService.resolveAlbumArt(for: album)
+                albumImage = resolution.image
+                albumArtService.applyResolution(resolution, to: album, modelContext: modelContext)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             if playerService.currentTrack != nil {
@@ -703,6 +720,7 @@ struct TrackRow: View {
     let isCurrentTrack: Bool
     let isPlaying: Bool
     let isCached: Bool
+    var isLocal: Bool = false
     var onToggleCache: (() -> Void)?
     var onDownload: (() -> Void)?
     @Environment(ThemeService.self) private var themeService
@@ -768,13 +786,15 @@ struct TrackRow: View {
                     Label("Download", systemImage: "square.and.arrow.up")
                 }
 
-                Button {
-                    onToggleCache?()
-                } label: {
-                    if isCached {
-                        Label("Remove Offline Access", systemImage: "xmark.circle")
-                    } else {
-                        Label("Make Available Offline", systemImage: "arrow.down.circle")
+                if !isLocal {
+                    Button {
+                        onToggleCache?()
+                    } label: {
+                        if isCached {
+                            Label("Remove Offline Access", systemImage: "xmark.circle")
+                        } else {
+                            Label("Make Available Offline", systemImage: "arrow.down.circle")
+                        }
                     }
                 }
             } label: {
@@ -818,3 +838,4 @@ struct ShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+
