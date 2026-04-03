@@ -12,6 +12,7 @@ final class Track {
     var trackNumber: Int
     var modifiedTime: String?
     var localFilePath: String?
+    var isHidden: Bool = false
 
     init(googleFileId: String, name: String, album: Album? = nil,
          durationSeconds: Double? = nil, mimeType: String,

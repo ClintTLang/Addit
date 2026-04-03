@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import AVFoundation
 
 struct AlbumDetailView: View {
     let album: Album
@@ -23,6 +24,7 @@ struct AlbumDetailView: View {
     @State private var toolbarActionGeneration = 0
     @State private var shareFileURL: URL?
     @State private var isDownloadingAlbum = false
+    @State private var albumDurationSeconds: Double = 0
 
     private let coverSize: CGFloat = 200
 
@@ -30,8 +32,24 @@ struct AlbumDetailView: View {
         album.tracks.sorted { $0.trackNumber < $1.trackNumber }
     }
 
+    private var filteredDisplayItems: [TracklistItem] {
+        if album.showHiddenTracks { return displayItems }
+        return displayItems.filter {
+            if case .track(let track) = $0 { return !track.isHidden }
+            return true
+        }
+    }
+
     private var playableTracks: [Track] {
-        displayItems.compactMap(\.asTrack)
+        displayItems.compactMap(\.asTrack).filter { !$0.isHidden }
+    }
+
+    private var albumDurationMinutes: Int {
+        Int((albumDurationSeconds / 60).rounded())
+    }
+
+    private var hasHiddenTracks: Bool {
+        displayItems.contains { if case .track(let t) = $0 { return t.isHidden } else { return false } }
     }
 
     /// Pre-computed track numbers keyed by track's googleFileId, avoiding O(n²) per-row filtering.
@@ -127,7 +145,7 @@ struct AlbumDetailView: View {
                 }
 
                 Section {
-                    ForEach(Array(displayItems.enumerated()), id: \.element.id) { _, item in
+                    ForEach(Array(filteredDisplayItems.enumerated()), id: \.element.id) { _, item in
                         switch item {
                         case .track(let track):
                             TrackRow(
@@ -142,13 +160,22 @@ struct AlbumDetailView: View {
                                 },
                                 onDownload: {
                                     downloadAndShare(track: track)
+                                },
+                                onToggleHidden: {
+                                    track.isHidden.toggle()
+                                    try? modelContext.save()
                                 }
                             )
                             .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                             .listRowBackground(Color.clear)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                playerService.playTrack(track, inQueue: playableTracks)
+                                if track.isHidden {
+                                    // Play the hidden track solo — don't add it to the album queue
+                                    playerService.playTrack(track, inQueue: [track])
+                                } else {
+                                    playerService.playTrack(track, inQueue: playableTracks)
+                                }
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
@@ -185,6 +212,17 @@ struct AlbumDetailView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                         }
+                    }
+
+                    if albumDurationMinutes > 0 {
+                        Text("\(albumDurationMinutes) min")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 44)
+                            .padding(.top, 12)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                     }
                 }
 
@@ -280,6 +318,22 @@ struct AlbumDetailView: View {
                         .padding(.vertical, 12)
                     }
 
+                    if hasHiddenTracks {
+                        Divider()
+
+                        Button {
+                            withAnimation { album.showHiddenTracks.toggle() }
+                            try? modelContext.save()
+                            withAnimation { showToolbarActions = false }
+                        } label: {
+                            Label(album.showHiddenTracks ? "Hide Hidden Tracks" : "Show Hidden Tracks",
+                                  systemImage: album.showHiddenTracks ? "eye.slash" : "eye")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                    }
+
                     Divider()
 
                     Button {
@@ -342,6 +396,9 @@ struct AlbumDetailView: View {
             }
             refreshCachedState()
         }
+        .task(id: "\(playableTracks.map(\.googleFileId))") {
+            await calculateAlbumDuration()
+        }
         .onChange(of: playerService.currentTrack?.googleFileId) {
             refreshCachedState()
         }
@@ -390,6 +447,18 @@ struct AlbumDetailView: View {
                 }
             }
         }
+    }
+
+    private func calculateAlbumDuration() async {
+        var total: Double = 0
+        for track in playableTracks {
+            if let url = track.localFileURL ?? cacheService.cachedFileURL(for: track) {
+                if let file = try? AVAudioFile(forReading: url) {
+                    total += Double(file.length) / file.processingFormat.sampleRate
+                }
+            }
+        }
+        albumDurationSeconds = total
     }
 
     private func refreshCachedState() {
@@ -761,6 +830,7 @@ struct TrackRow: View {
     var isLocal: Bool = false
     var onToggleCache: (() -> Void)?
     var onDownload: (() -> Void)?
+    var onToggleHidden: (() -> Void)?
     @Environment(ThemeService.self) private var themeService
 
     var body: some View {
@@ -773,26 +843,26 @@ struct TrackRow: View {
             } else {
                 Text("\(number)")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(track.isHidden ? Color.secondary.opacity(0.3) : .secondary)
                     .frame(width: 24)
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.displayName)
                     .font(.body)
-                    .foregroundStyle(isCurrentTrack ? themeService.accentColor : .primary)
+                    .foregroundColor(isCurrentTrack ? themeService.accentColor : track.isHidden ? Color.secondary.opacity(0.5) : .primary)
                     .lineLimit(1)
 
                 HStack(spacing: 4) {
                     if isCached {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(track.isHidden ? Color.secondary.opacity(0.3) : .secondary)
                     }
                     if let size = track.fileSize {
                         Text(formatFileSize(size))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(track.isHidden ? Color.secondary.opacity(0.3) : .secondary)
                     }
                 }
             }
@@ -816,6 +886,13 @@ struct TrackRow: View {
                         }
                     }
                     .frame(height: 10)
+                }
+
+                Button {
+                    onToggleHidden?()
+                } label: {
+                    Label(track.isHidden ? "Unhide Track" : "Hide Track",
+                          systemImage: track.isHidden ? "eye" : "eye.slash")
                 }
 
                 Button {

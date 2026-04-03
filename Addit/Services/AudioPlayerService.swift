@@ -59,7 +59,7 @@ final class AudioPlayerService {
 
     func playAlbum(_ album: Album, startingAt index: Int = 0, shuffled: Bool = false) {
         userQueue.removeAll()
-        let sorted = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
+        let sorted = album.tracks.sorted { $0.trackNumber < $1.trackNumber }.filter { !$0.isHidden }
         originalQueue = sorted
 
         if shuffled {

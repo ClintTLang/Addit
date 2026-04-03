@@ -24,6 +24,7 @@ final class Album {
     var additDataFileId: String?
     var storageSourceRaw: String? = StorageSource.googleDrive.rawValue
     var localCoverPath: String?
+    var showHiddenTracks: Bool = true
 
     var storageSource: StorageSource {
         get { StorageSource(rawValue: storageSourceRaw ?? "") ?? .googleDrive }
