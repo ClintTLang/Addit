@@ -15,6 +15,7 @@ struct CreateAlbumView: View {
     @State private var isCreating = false
     @State private var errorMessage: String?
     @State private var targetParentId: String?
+    @State private var targetShouldStar: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -32,8 +33,9 @@ struct CreateAlbumView: View {
                     folderId: nil,
                     folderName: selectedSource.rawValue,
                     source: selectedSource,
-                    onSelectParent: { parentId in
+                    onSelectParent: { parentId, markStarred in
                         targetParentId = parentId
+                        targetShouldStar = markStarred
                         newFolderName = "New Album"
                         showNameAlert = true
                     }
@@ -45,8 +47,9 @@ struct CreateAlbumView: View {
                     folderId: folder.id,
                     folderName: folder.name,
                     source: selectedSource,
-                    onSelectParent: { parentId in
+                    onSelectParent: { parentId, markStarred in
                         targetParentId = parentId
+                        targetShouldStar = markStarred
                         newFolderName = "New Album"
                         showNameAlert = true
                     }
@@ -64,7 +67,8 @@ struct CreateAlbumView: View {
             TextField("Folder name", text: $newFolderName)
             Button("Create") {
                 guard let parentId = targetParentId else { return }
-                Task { await createFolder(name: newFolderName, inParent: parentId) }
+                let markStarred = targetShouldStar
+                Task { await createFolder(name: newFolderName, inParent: parentId, markStarred: markStarred) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -89,7 +93,7 @@ struct CreateAlbumView: View {
         }
     }
 
-    private func createFolder(name: String, inParent parentId: String) async {
+    private func createFolder(name: String, inParent parentId: String, markStarred: Bool) async {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
@@ -99,6 +103,11 @@ struct CreateAlbumView: View {
         do {
             // Create folder in Drive
             let folder = try await driveService.createFolder(name: trimmedName, inParent: parentId)
+
+            // Star the new folder if the user picked the Starred tab
+            if markStarred {
+                try? await driveService.setStarred(fileId: folder.id, starred: true)
+            }
 
             // Initialize .addit-data with empty tracklist
             let metadata = AdditMetadata(tracklist: [])
@@ -145,11 +154,16 @@ struct CreateAlbumView: View {
 
 /// A folder browser for choosing WHERE to create a new folder.
 /// Similar to FolderBrowserView but shows a "Create Here" button instead of "Add to Library".
-private struct ParentFolderBrowserView: View {
+struct ParentFolderBrowserView: View {
     let folderId: String?
     let folderName: String
     let source: FolderSource
-    let onSelectParent: (String) -> Void
+    var buttonLabel: String = "Create Here"
+    var buttonIcon: String = "plus"
+    /// Callback receives the destination parent id and whether the new folder
+    /// should be marked as starred (true when the user is at the root of the
+    /// Starred tab — since "Starred" is a flag, not a real parent folder).
+    let onSelectParent: (_ parentId: String, _ markStarred: Bool) -> Void
 
     @Environment(GoogleDriveService.self) private var driveService
     @State private var subfolders: [DriveItem] = []
@@ -170,6 +184,13 @@ private struct ParentFolderBrowserView: View {
             return "root"
         }
         return nil
+    }
+
+    /// New folders should be starred when the user explicitly chose the Starred
+    /// tab's root as the destination. "Starred" isn't a real parent folder — it's
+    /// a boolean flag on the file — so we star it after creating.
+    private var shouldStar: Bool {
+        isRoot && source == .starred
     }
 
     var body: some View {
@@ -215,9 +236,9 @@ private struct ParentFolderBrowserView: View {
             if !isLoading, let parentId = createParentId {
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        onSelectParent(parentId)
+                        onSelectParent(parentId, shouldStar)
                     } label: {
-                        Label("Create Here", systemImage: "plus")
+                        Label(buttonLabel, systemImage: buttonIcon)
                     }
                 }
             }

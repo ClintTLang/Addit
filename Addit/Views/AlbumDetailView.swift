@@ -7,10 +7,13 @@ struct AlbumDetailView: View {
     let album: Album
     @Environment(AudioPlayerService.self) private var playerService
     @Environment(GoogleDriveService.self) private var driveService
+    @Environment(GoogleAuthService.self) private var authService
     @Environment(AlbumArtService.self) private var albumArtService
     @Environment(ThemeService.self) private var themeService
     @Environment(AudioCacheService.self) private var cacheService
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("storageSource") private var storageSource: String = StorageSource.googleDrive.rawValue
     @State private var isSyncing = true
     @State private var cachedTrackIds: Set<String> = []
     @State private var syncError: String?
@@ -25,6 +28,12 @@ struct AlbumDetailView: View {
     @State private var shareFileURL: URL?
     @State private var isDownloadingAlbum = false
     @State private var albumDurationSeconds: Double = 0
+    @State private var isSavingToLocal = false
+    @State private var saveProgress: (current: Int, total: Int, trackName: String) = (0, 0, "")
+    @State private var showDriveFolderPicker = false
+    @State private var isSavingToDrive = false
+    @State private var uploadProgress: (current: Int, total: Int, trackName: String) = (0, 0, "")
+    @State private var saveToDriveError: String?
 
     private let coverSize: CGFloat = 200
 
@@ -356,6 +365,34 @@ struct AlbumDetailView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+
+                    if !album.isLocal {
+                        Divider()
+
+                        Button {
+                            withAnimation { showToolbarActions = false }
+                            Task { await saveToLocalLibrary() }
+                        } label: {
+                            Label("Save to Local Library", systemImage: "square.and.arrow.down")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                    }
+
+                    if album.isLocal {
+                        Divider()
+
+                        Button {
+                            withAnimation { showToolbarActions = false }
+                            showDriveFolderPicker = true
+                        } label: {
+                            Label("Save to Google Drive Library", systemImage: "icloud.and.arrow.up")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                    }
                 }
                 .frame(width: 230)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -364,8 +401,108 @@ struct AlbumDetailView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .topTrailing)))
             }
         }
+        .overlay {
+            if isSavingToLocal {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .overlay {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.2)
+
+                            if saveProgress.total > 0 {
+                                Text("Track \(saveProgress.current) of \(saveProgress.total)")
+                                    .font(.subheadline.bold())
+
+                                Text(saveProgress.trackName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                GeometryReader { geo in
+                                    let fraction = CGFloat(saveProgress.current) / CGFloat(max(saveProgress.total, 1))
+                                    ZStack(alignment: .leading) {
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.1))
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.5))
+                                            .frame(width: geo.size.width * fraction)
+                                            .animation(.easeInOut(duration: 0.3), value: saveProgress.current)
+                                    }
+                                }
+                                .frame(height: 4)
+                                .padding(.horizontal, 4)
+                            } else {
+                                Text("Saving...")
+                                    .font(.subheadline)
+                            }
+                        }
+                        .frame(width: 220)
+                        .padding(24)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+            }
+        }
+        .overlay {
+            if isSavingToDrive {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .overlay {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.2)
+
+                            if uploadProgress.total > 0 {
+                                Text("Uploading \(uploadProgress.current) of \(uploadProgress.total)")
+                                    .font(.subheadline.bold())
+
+                                Text(uploadProgress.trackName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                GeometryReader { geo in
+                                    let fraction = CGFloat(uploadProgress.current) / CGFloat(max(uploadProgress.total, 1))
+                                    ZStack(alignment: .leading) {
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.1))
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.5))
+                                            .frame(width: geo.size.width * fraction)
+                                            .animation(.easeInOut(duration: 0.3), value: uploadProgress.current)
+                                    }
+                                }
+                                .frame(height: 4)
+                                .padding(.horizontal, 4)
+                            } else {
+                                Text("Uploading...")
+                                    .font(.subheadline)
+                            }
+                        }
+                        .frame(width: 220)
+                        .padding(24)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+            }
+        }
         .sheet(isPresented: $showSharingSheet) {
             SharingSheet(album: album)
+        }
+        .sheet(isPresented: $showDriveFolderPicker) {
+            ChooseDriveFolderSheet { parentId, markStarred in
+                showDriveFolderPicker = false
+                Task { await saveToGoogleDrive(parentId: parentId, markStarred: markStarred) }
+            }
+            .environment(driveService)
+            .environment(authService)
+        }
+        .alert("Upload Failed", isPresented: Binding(
+            get: { saveToDriveError != nil },
+            set: { if !$0 { saveToDriveError = nil } }
+        )) {
+            Button("OK") { saveToDriveError = nil }
+        } message: {
+            Text(saveToDriveError ?? "")
         }
         .navigationDestination(isPresented: $navigateToChat) {
             ChatView(album: album)
@@ -600,6 +737,309 @@ struct AlbumDetailView: View {
                 try? fm.removeItem(at: albumDir)
             } catch {
                 print("Failed to create album zip: \(error)")
+            }
+        }
+    }
+
+    private func saveToLocalLibrary() async {
+        guard !isSavingToLocal, !album.isLocal else { return }
+        await MainActor.run { isSavingToLocal = true }
+
+        let fm = FileManager.default
+        let localAlbumId = UUID().uuidString
+        let albumDir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LocalAlbums", isDirectory: true)
+            .appendingPathComponent(localAlbumId, isDirectory: true)
+        try? fm.createDirectory(at: albumDir, withIntermediateDirectories: true)
+
+        // Fetch all audio files from the Drive folder (handle pagination)
+        var allAudioFiles: [DriveItem] = []
+        var pageToken: String? = nil
+        repeat {
+            do {
+                let response = try await driveService.listAudioFiles(inFolder: album.googleFolderId, pageToken: pageToken)
+                allAudioFiles.append(contentsOf: response.files)
+                pageToken = response.nextPageToken
+            } catch {
+                print("[SaveToLocal] Failed to list audio files: \(error)")
+                break
+            }
+        } while pageToken != nil
+
+        print("[SaveToLocal] Found \(allAudioFiles.count) audio files in \(album.name)")
+
+        // Download all audio files to disk first
+        struct DownloadedTrack {
+            let name: String
+            let mimeType: String
+            let fileSize: Int64
+            let relativePath: String
+        }
+        var downloadedTracks: [DownloadedTrack] = []
+
+        for (index, file) in allAudioFiles.enumerated() {
+            do {
+                await MainActor.run {
+                    saveProgress = (current: index + 1, total: allAudioFiles.count, trackName: file.name)
+                }
+                let data = try await driveService.downloadFileData(fileId: file.id)
+                guard !data.isEmpty else {
+                    print("[SaveToLocal] Empty data for \(file.name), skipping")
+                    continue
+                }
+                let destURL = albumDir.appendingPathComponent(file.name)
+                try data.write(to: destURL)
+                downloadedTracks.append(DownloadedTrack(
+                    name: file.name,
+                    mimeType: file.mimeType,
+                    fileSize: Int64(data.count),
+                    relativePath: "LocalAlbums/\(localAlbumId)/\(file.name)"
+                ))
+            } catch {
+                print("[SaveToLocal] Failed to download \(file.name): \(error)")
+            }
+        }
+        print("[SaveToLocal] Downloaded \(downloadedTracks.count)/\(allAudioFiles.count) tracks")
+
+        // Fetch metadata from .addit-data
+        var albumArtist: String? = album.artistName
+        var tracklist: [String]? = album.cachedTracklist.isEmpty ? nil : album.cachedTracklist
+        do {
+            if let additDataItem = try await driveService.findFile(named: ".addit-data", inFolder: album.googleFolderId) {
+                let data = try await driveService.downloadFileData(fileId: additDataItem.id)
+                let metadata = try JSONDecoder().decode(AdditMetadata.self, from: data)
+                if let artist = metadata.artist { albumArtist = artist }
+                tracklist = metadata.tracklist
+            }
+        } catch {
+            print("[SaveToLocal] Failed to fetch .addit-data: \(error)")
+        }
+
+        // Fetch cover image
+        var coverRelativePath: String?
+        do {
+            if let coverItem = try await driveService.findCoverImage(inFolder: album.googleFolderId) {
+                let coverData = try await driveService.downloadFileData(fileId: coverItem.id)
+                let coverURL = albumDir.appendingPathComponent("cover.jpg")
+                try coverData.write(to: coverURL)
+                coverRelativePath = "LocalAlbums/\(localAlbumId)/cover.jpg"
+            }
+        } catch {
+            print("[SaveToLocal] Failed to fetch cover: \(error)")
+        }
+
+        // Find the highest displayOrder across all local albums
+        let localDescriptor = FetchDescriptor<Album>(
+            predicate: #Predicate { $0.storageSourceRaw == "localStorage" }
+        )
+        let existingLocalAlbums = (try? modelContext.fetch(localDescriptor)) ?? []
+        let nextOrder = (existingLocalAlbums.map(\.displayOrder).max() ?? 0) + 1
+
+        // Insert album and tracks atomically
+        let newAlbum = Album(
+            googleFolderId: "local_\(localAlbumId)",
+            name: album.name,
+            artistName: albumArtist,
+            trackCount: downloadedTracks.count,
+            dateAdded: .now,
+            canEdit: true,
+            isFolderOwner: true,
+            displayOrder: nextOrder,
+            storageSource: .localStorage
+        )
+        newAlbum.localCoverPath = coverRelativePath
+        if let tracklist, !tracklist.isEmpty {
+            newAlbum.cachedTracklist = tracklist
+        }
+        modelContext.insert(newAlbum)
+
+        // Determine track order from tracklist
+        let orderedTrackNames: [String]? = tracklist?.filter { !$0.hasPrefix(AdditMetadata.discMarkerPrefix) }
+
+        for (index, dl) in downloadedTracks.enumerated() {
+            let trackNumber: Int
+            if let orderedNames = orderedTrackNames,
+               let pos = orderedNames.firstIndex(of: dl.name) {
+                trackNumber = pos + 1
+            } else {
+                trackNumber = index + 1
+            }
+
+            let track = Track(
+                googleFileId: "local_\(UUID().uuidString)",
+                name: dl.name,
+                album: newAlbum,
+                mimeType: dl.mimeType,
+                fileSize: dl.fileSize,
+                trackNumber: trackNumber,
+                localFilePath: dl.relativePath
+            )
+            modelContext.insert(track)
+        }
+
+        try? modelContext.save()
+        print("[SaveToLocal] Saved album with \(downloadedTracks.count) tracks")
+
+        await MainActor.run {
+            isSavingToLocal = false
+            saveProgress = (0, 0, "")
+            // Switch to Local Library and navigate back
+            storageSource = StorageSource.localStorage.rawValue
+            dismiss()
+        }
+    }
+
+    private func saveToGoogleDrive(parentId: String, markStarred: Bool) async {
+        guard !isSavingToDrive, album.isLocal else { return }
+        await MainActor.run {
+            isSavingToDrive = true
+            uploadProgress = (0, 0, "")
+        }
+
+        let fm = FileManager.default
+        let localTracks = sortedTracks
+        let totalSteps = localTracks.count + 2 // tracks + .addit-data + cover
+
+        do {
+            // 1. Create the destination folder in Drive
+            await MainActor.run {
+                uploadProgress = (current: 0, total: totalSteps, trackName: "Creating folder...")
+            }
+            let driveFolder = try await driveService.createFolder(name: album.name, inParent: parentId)
+
+            // Star the new folder if the user picked the Starred tab
+            if markStarred {
+                try? await driveService.setStarred(fileId: driveFolder.id, starred: true)
+            }
+
+            // 2. Upload .addit-data with tracklist + artist
+            await MainActor.run {
+                uploadProgress = (current: 1, total: totalSteps, trackName: ".addit-data")
+            }
+            let tracklist: [String]
+            if !album.cachedTracklist.isEmpty {
+                tracklist = album.cachedTracklist
+            } else {
+                tracklist = localTracks.map(\.name)
+            }
+            let metadata = AdditMetadata(tracklist: tracklist, artist: album.artistName)
+            let additData = try JSONEncoder().encode(metadata)
+            let additDataItem = try await driveService.createFile(
+                name: ".addit-data",
+                mimeType: "application/json",
+                inFolder: driveFolder.id,
+                data: additData
+            )
+
+            // 3. Upload cover.jpg if present
+            var uploadedCoverItem: DriveItem?
+            if let coverPath = album.resolvedLocalCoverPath,
+               fm.fileExists(atPath: coverPath),
+               let coverData = try? Data(contentsOf: URL(fileURLWithPath: coverPath)) {
+                await MainActor.run {
+                    uploadProgress = (current: 2, total: totalSteps, trackName: "cover.jpg")
+                }
+                uploadedCoverItem = try? await driveService.createFile(
+                    name: "cover.jpg",
+                    mimeType: "image/jpeg",
+                    inFolder: driveFolder.id,
+                    data: coverData
+                )
+            }
+
+            // 4. Upload each audio track
+            struct UploadedTrack {
+                let driveItem: DriveItem
+                let mimeType: String
+                let fileSize: Int64
+                let trackNumber: Int
+            }
+            var uploadedTracks: [UploadedTrack] = []
+
+            for (index, track) in localTracks.enumerated() {
+                guard let url = track.localFileURL,
+                      fm.fileExists(atPath: url.path) else {
+                    print("[SaveToDrive] Skipping missing file: \(track.name)")
+                    continue
+                }
+                await MainActor.run {
+                    uploadProgress = (current: 2 + index + 1, total: totalSteps, trackName: track.name)
+                }
+                let data = try Data(contentsOf: url)
+                let mime = track.mimeType.isEmpty ? "audio/mpeg" : track.mimeType
+                let driveItem = try await driveService.createFile(
+                    name: track.name,
+                    mimeType: mime,
+                    inFolder: driveFolder.id,
+                    data: data
+                )
+                uploadedTracks.append(UploadedTrack(
+                    driveItem: driveItem,
+                    mimeType: mime,
+                    fileSize: Int64(data.count),
+                    trackNumber: track.trackNumber
+                ))
+            }
+
+            print("[SaveToDrive] Uploaded \(uploadedTracks.count)/\(localTracks.count) tracks")
+
+            // 5. Create the new Drive Album record in shared store
+            let existingAlbums = (try? modelContext.fetch(FetchDescriptor<Album>())) ?? []
+            let nextOrder = (existingAlbums.map(\.displayOrder).max() ?? -1) + 1
+
+            let newAlbum = Album(
+                googleFolderId: driveFolder.id,
+                name: album.name,
+                artistName: album.artistName,
+                trackCount: uploadedTracks.count,
+                dateAdded: .now,
+                canEdit: true,
+                isFolderOwner: true,
+                displayOrder: nextOrder,
+                storageSource: .googleDrive
+            )
+            newAlbum.additDataFileId = additDataItem.id
+            newAlbum.cachedTracklist = tracklist
+            if let coverItem = uploadedCoverItem {
+                newAlbum.coverFileId = coverItem.id
+                newAlbum.coverMimeType = "image/jpeg"
+                newAlbum.coverModifiedTime = coverItem.modifiedTime
+                newAlbum.coverUpdatedAt = .now
+            }
+            if let email = authService.userEmail {
+                newAlbum.accountId = AccountManager.storageIdentifier(for: email)
+            }
+            modelContext.insert(newAlbum)
+
+            for uploaded in uploadedTracks {
+                let track = Track(
+                    googleFileId: uploaded.driveItem.id,
+                    name: uploaded.driveItem.name,
+                    album: newAlbum,
+                    mimeType: uploaded.mimeType,
+                    fileSize: uploaded.fileSize,
+                    trackNumber: uploaded.trackNumber,
+                    modifiedTime: uploaded.driveItem.modifiedTime
+                )
+                modelContext.insert(track)
+            }
+
+            try? modelContext.save()
+            print("[SaveToDrive] Created Drive album '\(album.name)' with \(uploadedTracks.count) tracks")
+
+            await MainActor.run {
+                isSavingToDrive = false
+                uploadProgress = (0, 0, "")
+                // Switch to Google Drive Library and navigate back
+                storageSource = StorageSource.googleDrive.rawValue
+                dismiss()
+            }
+        } catch {
+            print("[SaveToDrive] Failed: \(error)")
+            await MainActor.run {
+                isSavingToDrive = false
+                uploadProgress = (0, 0, "")
+                saveToDriveError = error.localizedDescription
             }
         }
     }
@@ -985,5 +1425,60 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+/// Sheet that lets the user pick a destination folder in Google Drive,
+/// reusing the same browser used by CreateAlbumView.
+struct ChooseDriveFolderSheet: View {
+    let onSelectParent: (_ parentId: String, _ markStarred: Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedSource: FolderSource = .personal
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Source", selection: $selectedSource) {
+                    ForEach(FolderSource.allCases, id: \.self) { source in
+                        Text(source.rawValue).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                ParentFolderBrowserView(
+                    folderId: nil,
+                    folderName: selectedSource.rawValue,
+                    source: selectedSource,
+                    buttonLabel: "Save Here",
+                    buttonIcon: "icloud.and.arrow.up",
+                    onSelectParent: { parentId, markStarred in
+                        onSelectParent(parentId, markStarred)
+                    }
+                )
+                .id(selectedSource)
+            }
+            .navigationDestination(for: DriveItem.self) { folder in
+                ParentFolderBrowserView(
+                    folderId: folder.id,
+                    folderName: folder.name,
+                    source: selectedSource,
+                    buttonLabel: "Save Here",
+                    buttonIcon: "icloud.and.arrow.up",
+                    onSelectParent: { parentId, markStarred in
+                        onSelectParent(parentId, markStarred)
+                    }
+                )
+            }
+            .navigationTitle("Save to Drive")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
 }
 

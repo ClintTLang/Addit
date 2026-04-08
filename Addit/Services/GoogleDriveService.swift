@@ -248,6 +248,22 @@ final class GoogleDriveService {
         return try JSONDecoder().decode(DriveItem.self, from: responseData)
     }
 
+    func setStarred(fileId: String, starred: Bool) async throws {
+        let token = try await getToken()
+        let url = URL(string: "\(baseURL)/files/\(fileId)?supportsAllDrives=true")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["starred": starred]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
     func updateFileData(fileId: String, data: Data, mimeType: String) async throws {
         let token = try await getToken()
         let url = URL(string: "https://www.googleapis.com/upload/drive/v3/files/\(fileId)?uploadType=media&supportsAllDrives=true")!

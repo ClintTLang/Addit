@@ -44,7 +44,7 @@ struct LibraryView: View {
 
     private var sourceAlbums: [Album] {
         if currentSource == .localStorage {
-            // iPhone Storage: show all local albums regardless of account
+            // Local Library: show all local albums regardless of account
             return albums.filter { $0.storageSource == .localStorage }
         } else {
             // Google Drive: show only albums belonging to the active account
@@ -220,14 +220,14 @@ struct LibraryView: View {
                             storageSource = StorageSource.localStorage.rawValue
                         } label: {
                             if currentSource == .localStorage {
-                                Label("iPhone Storage", systemImage: "checkmark")
+                                Label("Local Library", systemImage: "checkmark")
                             } else {
-                                Text("iPhone Storage")
+                                Text("Local Library")
                             }
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(currentSource == .googleDrive ? "Google Drive" : "iPhone Storage")
+                            Text(currentSource == .googleDrive ? "Google Drive" : "Local Library")
                                 .font(.headline)
                             Image(systemName: "chevron.down")
                                 .font(.caption.weight(.semibold))
@@ -369,7 +369,7 @@ struct LibraryView: View {
                                 Button(role: .destructive) {
                                     showClearLocalConfirmation = true
                                 } label: {
-                                    Label("Erase \"iPhone Storage\" Library in Addit", systemImage: "trash")
+                                    Label("Erase \"Local Library\" in Addit", systemImage: "trash")
                                 }
                             }
                         }
@@ -463,13 +463,13 @@ struct LibraryView: View {
         } message: {
             Text("Your library and downloads for this account will be erased, but no Google Drive data will be modified.")
         }
-        .alert("Erase \"iPhone Storage\" Library?", isPresented: $showClearLocalConfirmation) {
+        .alert("Erase \"Local Library\"?", isPresented: $showClearLocalConfirmation) {
             Button("Erase", role: .destructive) {
                 clearLocalStorage()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("All imported albums and audio files will be permanently deleted.\n\nThis applies only to your \"iPhone Storage\" library within Addit, and will not modify any data outside of Addit, or data in your other Addit libraries.")
+            Text("All imported albums and audio files will be permanently deleted.\n\nThis applies only to your \"Local Library\" within Addit, and will not modify any data outside of Addit, or data in your other Addit libraries.")
         }
         .task {
             initializeDisplayOrder()
@@ -966,6 +966,21 @@ struct AlbumMetadataEditorSheet: View {
 
     private let coverSize: CGFloat = 180
 
+    /// Pre-computed disc numbers keyed by TracklistItem.id, so each disc-marker row
+    /// can render its label without slicing `reorderedItems` inside the ForEach body
+    /// (which interacts badly with `.onMove` diffing on UICollectionView).
+    private var discNumbersByItemId: [String: Int] {
+        var result: [String: Int] = [:]
+        var counter = 0
+        for item in reorderedItems {
+            if case .discMarker = item {
+                counter += 1
+                result[item.id] = counter
+            }
+        }
+        return result
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -1056,7 +1071,7 @@ struct AlbumMetadataEditorSheet: View {
                 // Tracklist section
                 Section {
                     if !reorderedItems.isEmpty {
-                        ForEach(Array(reorderedItems.enumerated()), id: \.element.id) { index, item in
+                        ForEach(reorderedItems) { item in
                             switch item {
                             case .track(let track):
                                 HStack(spacing: 6) {
@@ -1087,14 +1102,17 @@ struct AlbumMetadataEditorSheet: View {
                                         .foregroundStyle(.tertiary)
                                 }
                             case .discMarker:
-                                let discNumber = reorderedItems[0...index].filter(\.isDiscMarker).count
+                                let discNumber = discNumbersByItemId[item.id] ?? 1
                                 HStack {
                                     Text("Disc \(discNumber)")
                                         .font(.subheadline.bold())
                                         .foregroundStyle(.secondary)
                                     Spacer()
                                     Button {
-                                        reorderedItems.remove(at: index)
+                                        let targetId = item.id
+                                        withAnimation {
+                                            reorderedItems.removeAll { $0.id == targetId }
+                                        }
                                     } label: {
                                         Image(systemName: "xmark.circle.fill")
                                             .foregroundStyle(.tertiary)
@@ -1105,7 +1123,9 @@ struct AlbumMetadataEditorSheet: View {
                             }
                         }
                         .onMove { source, destination in
-                            reorderedItems.move(fromOffsets: source, toOffset: destination)
+                            withAnimation {
+                                reorderedItems.move(fromOffsets: source, toOffset: destination)
+                            }
                         }
                     }
                 } header: {
@@ -1272,6 +1292,7 @@ struct AlbumMetadataEditorSheet: View {
             // Update track names, numbers, and persist tracklist with disc markers
             var tracklist: [String] = []
             var trackIndex = 0
+            var discNumber = 0
             for item in reorderedItems {
                 switch item {
                 case .track(let track):
@@ -1296,7 +1317,8 @@ struct AlbumMetadataEditorSheet: View {
                     track.trackNumber = trackIndex
                     tracklist.append(track.name)
                 case .discMarker:
-                    tracklist.append("---disc---")
+                    discNumber += 1
+                    tracklist.append("\(AdditMetadata.discMarkerPrefix)Disc \(discNumber)")
                 }
             }
             album.cachedTracklist = tracklist
@@ -1652,31 +1674,23 @@ struct AlbumMetadataEditorSheet: View {
     private func loadTracklistItems() async {
         let sortedTracks = album.tracks.sorted { $0.trackNumber < $1.trackNumber }
 
-        // Try to load existing addit-data to get disc markers
+        // Local albums: rebuild from cachedTracklist (which holds disc markers inline)
+        if album.isLocal {
+            if !album.cachedTracklist.isEmpty {
+                reorderedItems = buildItems(from: album.cachedTracklist, tracks: sortedTracks)
+            } else {
+                reorderedItems = sortedTracks.map { .track($0) }
+            }
+            return
+        }
+
+        // Drive albums: try to load existing .addit-data for disc markers
         if let fileId = additDataFileId {
             do {
                 let data = try await driveService.downloadFileData(fileId: fileId)
                 if let metadata = try? JSONDecoder().decode(AdditMetadata.self, from: data),
                    let tracklist = metadata.tracklist {
-                    var items: [TracklistItem] = []
-                    var matchedIds = Set<String>()
-
-                    for entry in tracklist {
-                        if entry.hasPrefix(AdditMetadata.discMarkerPrefix) {
-                            let label = String(entry.dropFirst(AdditMetadata.discMarkerPrefix.count))
-                            items.append(.discMarker(id: UUID(), label: label))
-                        } else if let track = sortedTracks.first(where: { $0.name == entry && !matchedIds.contains($0.googleFileId) }) {
-                            items.append(.track(track))
-                            matchedIds.insert(track.googleFileId)
-                        }
-                    }
-
-                    // Append any tracks not in the tracklist
-                    for track in sortedTracks where !matchedIds.contains(track.googleFileId) {
-                        items.append(.track(track))
-                    }
-
-                    reorderedItems = items
+                    reorderedItems = buildItems(from: tracklist, tracks: sortedTracks)
                     return
                 }
             } catch {
@@ -1686,6 +1700,30 @@ struct AlbumMetadataEditorSheet: View {
 
         // Default: just tracks, no disc markers
         reorderedItems = sortedTracks.map { .track($0) }
+    }
+
+    /// Builds an ordered TracklistItem array from a saved tracklist (with disc markers)
+    /// and the album's known tracks. Tracks not present in the tracklist are appended.
+    private func buildItems(from tracklist: [String], tracks: [Track]) -> [TracklistItem] {
+        var items: [TracklistItem] = []
+        var matchedIds = Set<String>()
+
+        for entry in tracklist {
+            if entry.hasPrefix(AdditMetadata.discMarkerPrefix) {
+                let label = String(entry.dropFirst(AdditMetadata.discMarkerPrefix.count))
+                items.append(.discMarker(id: UUID(), label: label))
+            } else if let track = tracks.first(where: { $0.name == entry && !matchedIds.contains($0.googleFileId) }) {
+                items.append(.track(track))
+                matchedIds.insert(track.googleFileId)
+            }
+        }
+
+        // Append any tracks not in the tracklist
+        for track in tracks where !matchedIds.contains(track.googleFileId) {
+            items.append(.track(track))
+        }
+
+        return items
     }
 
     private func resolveFolderOwnership() async {
