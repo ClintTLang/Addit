@@ -23,11 +23,12 @@ struct NowPlayingBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Draggable scrubber
+            // Draggable waveform scrubber
             MiniScrubber(
                 value: isScrubbing ? seekValue : playerService.currentTime,
                 duration: playerService.duration,
                 accentColor: themeService.accentColor,
+                waveformSamples: playerService.waveformSamples,
                 onChanged: { newValue in
                     if !isScrubbing {
                         isScrubbing = true
@@ -139,31 +140,68 @@ private struct MiniScrubber: View {
     let value: TimeInterval
     let duration: TimeInterval
     let accentColor: Color
+    let waveformSamples: [Float]
     let onChanged: (TimeInterval) -> Void
     let onEnded: (TimeInterval) -> Void
 
-    private let trackHeight: CGFloat = 3
-    private let hitAreaHeight: CGFloat = 12
+    private let barHeight: CGFloat = 20
+    private let hitAreaHeight: CGFloat = 28
+    private let minBarFraction: CGFloat = 0.08
+
+    @State private var lastHapticBar: Int = -1
+    @State private var hapticGenerator: UIImpactFeedbackGenerator?
 
     private var progress: Double {
         duration > 0 ? value / duration : 0
     }
 
+    private var barCount: Int {
+        waveformSamples.isEmpty ? 80 : waveformSamples.count
+    }
+
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
-            let fillWidth = width * progress
 
-            ZStack(alignment: .leading) {
-                // Track background
-                Capsule()
-                    .fill(accentColor.opacity(0.2))
-                    .frame(height: trackHeight)
+            Canvas { context, size in
+                let samples = waveformSamples.isEmpty
+                    ? [Float](repeating: 0.15, count: 120)
+                    : waveformSamples
+                let count = samples.count
+                guard count > 0 else { return }
 
-                // Filled track
-                Capsule()
-                    .fill(accentColor)
-                    .frame(width: max(0, fillWidth), height: trackHeight)
+                let gap: CGFloat = 3.5
+                let totalGaps = gap * CGFloat(count - 1)
+                let barWidth = max(1, (size.width - totalGaps) / CGFloat(count))
+                let progressX = size.width * progress
+
+                for i in 0..<count {
+                    let x = (barWidth + gap) * CGFloat(i)
+                    let amplitude = CGFloat(max(Float(minBarFraction), samples[i]))
+                    let h = amplitude * barHeight
+                    let y = (barHeight - h) / 2 + (size.height - barHeight) / 2
+
+                    let rect = CGRect(x: x, y: y, width: barWidth, height: h)
+                    let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
+
+                    let isPast = x + barWidth <= progressX
+                    let isPartial = x < progressX && x + barWidth > progressX
+
+                    if isPast {
+                        context.fill(path, with: .color(accentColor))
+                    } else if isPartial {
+                        // Split bar at the progress boundary
+                        let splitX = progressX - x
+                        let filledRect = CGRect(x: x, y: y, width: splitX, height: h)
+                        let unfilledRect = CGRect(x: x + splitX, y: y, width: barWidth - splitX, height: h)
+                        context.fill(Path(roundedRect: filledRect, cornerRadius: barWidth / 2),
+                                     with: .color(accentColor))
+                        context.fill(Path(roundedRect: unfilledRect, cornerRadius: barWidth / 2),
+                                     with: .color(accentColor.opacity(0.25)))
+                    } else {
+                        context.fill(path, with: .color(accentColor.opacity(0.25)))
+                    }
+                }
             }
             .frame(height: hitAreaHeight)
             .contentShape(Rectangle())
@@ -172,10 +210,24 @@ private struct MiniScrubber: View {
                     .onChanged { drag in
                         let fraction = max(0, min(1, drag.location.x / width))
                         onChanged(fraction * max(duration, 1))
+
+                        // Haptic tick at fixed 40 discrete steps (independent of bar count)
+                        let hapticSteps = 40
+                        let currentBar = min(hapticSteps - 1, Int(fraction * CGFloat(hapticSteps)))
+                        if currentBar != lastHapticBar {
+                            if hapticGenerator == nil {
+                                hapticGenerator = UIImpactFeedbackGenerator(style: .light)
+                                hapticGenerator?.prepare()
+                            }
+                            hapticGenerator?.impactOccurred(intensity: 0.7)
+                            lastHapticBar = currentBar
+                        }
                     }
                     .onEnded { drag in
                         let fraction = max(0, min(1, drag.location.x / width))
                         onEnded(fraction * max(duration, 1))
+                        lastHapticBar = -1
+                        hapticGenerator = nil
                     }
             )
         }

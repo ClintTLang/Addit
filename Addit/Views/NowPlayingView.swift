@@ -285,6 +285,10 @@ private struct FullScrubber: View {
 
     private let trackHeight: CGFloat = 4
     private let thumbSize: CGFloat = 14
+    private let hapticSteps: Int = 40
+
+    @State private var lastHapticStep: Int = -1
+    @State private var hapticGenerator: UIImpactFeedbackGenerator?
 
     private var progress: Double {
         duration > 0 ? value / duration : 0
@@ -316,10 +320,22 @@ private struct FullScrubber: View {
                     .onChanged { drag in
                         let fraction = max(0, min(1, drag.location.x / width))
                         onChanged(fraction * max(duration, 1))
+
+                        let currentStep = min(hapticSteps - 1, Int(fraction * CGFloat(hapticSteps)))
+                        if currentStep != lastHapticStep {
+                            if hapticGenerator == nil {
+                                hapticGenerator = UIImpactFeedbackGenerator(style: .light)
+                                hapticGenerator?.prepare()
+                            }
+                            hapticGenerator?.impactOccurred(intensity: 0.7)
+                            lastHapticStep = currentStep
+                        }
                     }
                     .onEnded { drag in
                         let fraction = max(0, min(1, drag.location.x / width))
                         onEnded(fraction * max(duration, 1))
+                        lastHapticStep = -1
+                        hapticGenerator = nil
                     }
             )
         }

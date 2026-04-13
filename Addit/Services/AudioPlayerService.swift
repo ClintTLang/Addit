@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+import Accelerate
 
 enum RepeatMode {
     case off, all, one
@@ -26,6 +27,9 @@ final class AudioPlayerService {
     var playbackError: String? = nil
     var failedTrack: Track? = nil
 
+    /// Downsampled waveform amplitudes (0…1) for the current track, used by the mini scrubber.
+    var waveformSamples: [Float] = []
+
     var currentTrack: Track? {
         guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return nil }
         return queue[currentIndex]
@@ -37,7 +41,7 @@ final class AudioPlayerService {
     @ObservationIgnored private var currentAudioFile: AVAudioFile?
     @ObservationIgnored private var seekFrameOffset: AVAudioFramePosition = 0
     @ObservationIgnored private var playerTimeOffset: AVAudioFramePosition = 0
-    @ObservationIgnored private var timeTimer: Timer?
+    @ObservationIgnored private var timeTimer: CADisplayLink?
     @ObservationIgnored private var originalQueue: [Track] = []
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// Incremented each time we load or seek; the completion handler checks this to ignore stale callbacks
@@ -47,7 +51,12 @@ final class AudioPlayerService {
     // Gapless playback
     @ObservationIgnored private var nextAudioFile: AVAudioFile?
     @ObservationIgnored private var nextTrackIndex: Int?
+    @ObservationIgnored private var nextFileURL: URL?
+    @ObservationIgnored private var nextWaveform: [Float]?
     @ObservationIgnored private var isGaplessTransition = false
+
+    // Waveform extraction
+    @ObservationIgnored private var waveformTask: Task<Void, Never>?
 
     init() {
         configureAudioSession()
@@ -305,6 +314,9 @@ final class AudioPlayerService {
             duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
             currentTime = 0
 
+            // Generate waveform asynchronously from the file URL
+            generateWaveform(from: fileURL)
+
             playerNode.scheduleSegment(audioFile, startingFrame: 0, frameCount: AVAudioFrameCount(audioFile.length), at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.completionFired(generation: gen)
             }
@@ -492,6 +504,8 @@ final class AudioPlayerService {
         // Clear any previous gapless state
         nextAudioFile = nil
         nextTrackIndex = nil
+        nextFileURL = nil
+        nextWaveform = nil
         isGaplessTransition = false
 
         // Determine next index
@@ -544,9 +558,17 @@ final class AudioPlayerService {
                     return
                 }
 
+                // Pre-generate waveform for seamless visual transition
+                let precomputedWaveform = Self.extractWaveform(from: fileURL, barCount: Self.waveformBarCount)
+
+                // Check generation one more time after waveform extraction
+                guard gen == scheduleGeneration else { return }
+
                 // Schedule on the player node — it will play immediately after current segment
                 nextAudioFile = audioFile
                 nextTrackIndex = nextIdx
+                nextFileURL = fileURL
+                nextWaveform = precomputedWaveform
                 isGaplessTransition = true
 
                 let expectedGen = gen
@@ -623,9 +645,11 @@ final class AudioPlayerService {
 
     private func startTimeTracking() {
         stopTimeTracking()
-        timeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        let displayLink = CADisplayLink(target: DisplayLinkTarget { [weak self] in
             self?.updateCurrentTime()
-        }
+        }, selector: #selector(DisplayLinkTarget.tick))
+        displayLink.add(to: .main, forMode: .common)
+        timeTimer = displayLink
     }
 
     private func stopTimeTracking() {
@@ -657,9 +681,12 @@ final class AudioPlayerService {
 
         // If the next track was pre-scheduled gaplessly, just update state
         if isGaplessTransition, let nextIndex = nextTrackIndex, let nextFile = nextAudioFile {
+            let precomputedWaveform = nextWaveform
             isGaplessTransition = false
             nextAudioFile = nil
             nextTrackIndex = nil
+            nextFileURL = nil
+            nextWaveform = nil
 
             // Capture the current player time so we can offset the time display
             if let nodeTime = playerNode.lastRenderTime, nodeTime.isSampleTimeValid,
@@ -672,6 +699,10 @@ final class AudioPlayerService {
             seekFrameOffset = 0
             duration = Double(nextFile.length) / nextFile.processingFormat.sampleRate
             currentTime = 0
+
+            // Swap in the pre-computed waveform instantly (no regeneration delay)
+            waveformTask?.cancel()
+            waveformSamples = precomputedWaveform ?? []
 
             updateNowPlayingInfo()
             prefetchUpcoming()
@@ -766,4 +797,98 @@ final class AudioPlayerService {
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
+
+    // MARK: - Waveform
+
+    /// Number of bars to display in the mini waveform scrubber.
+    private static let waveformBarCount = 120
+
+    /// Reads the audio file at `url` on a background thread, downsamples into
+    /// `waveformBarCount` peak‐amplitude buckets (0…1), and publishes the result
+    /// on the main thread.
+    private func generateWaveform(from url: URL) {
+        waveformTask?.cancel()
+        waveformSamples = []
+
+        let barCount = Self.waveformBarCount
+        waveformTask = Task.detached(priority: .utility) { [weak self] in
+            guard let samples = Self.extractWaveform(from: url, barCount: barCount) else { return }
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                self?.waveformSamples = samples
+            }
+        }
+    }
+
+    /// Pure function — reads an audio file and returns an array of normalised
+    /// peak amplitudes (one per bar).  Returns nil on error.
+    private nonisolated static func extractWaveform(from url: URL, barCount: Int) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+
+        let totalFrames = file.length
+        guard totalFrames > 0 else { return nil }
+
+        let framesPerBar = Int(totalFrames) / barCount
+        guard framesPerBar > 0 else { return nil }
+
+        // Use the file's processing format (deinterleaved float, possibly multi-channel)
+        let format = file.processingFormat
+        let channelCount = Int(format.channelCount)
+
+        // Process in chunks to keep memory low
+        let chunkSize = min(framesPerBar, 65536)
+        var peaks = [Float](repeating: 0, count: barCount)
+        var globalMax: Float = 0
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(chunkSize)) else { return nil }
+
+        for barIndex in 0..<barCount {
+            if Task.isCancelled { return nil }
+
+            let barStart = AVAudioFramePosition(barIndex) * AVAudioFramePosition(framesPerBar)
+            let barEnd = min(barStart + AVAudioFramePosition(framesPerBar), totalFrames)
+            var barPeak: Float = 0
+
+            file.framePosition = barStart
+
+            var pos = barStart
+            while pos < barEnd {
+                let toRead = AVAudioFrameCount(min(Int(barEnd - pos), chunkSize))
+                buffer.frameLength = 0
+                do {
+                    try file.read(into: buffer, frameCount: toRead)
+                } catch {
+                    break
+                }
+                guard buffer.frameLength > 0, let channelData = buffer.floatChannelData else { break }
+
+                // Peak amplitude across all channels
+                for ch in 0..<channelCount {
+                    var chunkPeak: Float = 0
+                    vDSP_maxmgv(channelData[ch], 1, &chunkPeak, vDSP_Length(buffer.frameLength))
+                    barPeak = max(barPeak, chunkPeak)
+                }
+
+                pos += AVAudioFramePosition(buffer.frameLength)
+            }
+
+            peaks[barIndex] = barPeak
+            globalMax = max(globalMax, barPeak)
+        }
+
+        // Normalise to 0…1
+        guard globalMax > 0 else { return [Float](repeating: 0, count: barCount) }
+        var scale = 1.0 / globalMax
+        vDSP_vsmul(peaks, 1, &scale, &peaks, 1, vDSP_Length(barCount))
+
+        return peaks
+    }
+}
+
+/// Bridging helper so a `CADisplayLink` (which needs an `@objc` selector)
+/// can call a plain Swift closure on every display refresh.
+private final class DisplayLinkTarget: NSObject {
+    private let callback: () -> Void
+    init(_ callback: @escaping () -> Void) { self.callback = callback }
+    @objc func tick() { callback() }
 }
