@@ -35,6 +35,7 @@ struct ContentView: View {
             }
         }
         .tint(themeService.accentColor)
+        .preferredColorScheme(themeService.appearanceMode.colorScheme)
         .alert("Unable to play this audio format", isPresented: .init(
             get: { playerService.failedTrack != nil },
             set: { if !$0 { playerService.failedTrack = nil } }

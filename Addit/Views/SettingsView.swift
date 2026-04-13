@@ -8,22 +8,36 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Button {
-                    showColorPicker = true
-                } label: {
-                    HStack {
-                        Text("Change Default Color")
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(themeService.accentColor)
-                            .frame(width: 22, height: 22)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.primary.opacity(0.2), lineWidth: 1)
-                            }
+                Section {
+                    Picker("Appearance", selection: Binding(
+                        get: { themeService.appearanceMode },
+                        set: { themeService.appearanceMode = $0 }
+                    )) {
+                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
                     }
+                    .pickerStyle(.segmented)
                 }
-                .buttonStyle(.plain)
+
+                Section {
+                    Button {
+                        showColorPicker = true
+                    } label: {
+                        HStack {
+                            Text("Change Default Color")
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(themeService.accentColor)
+                                .frame(width: 22, height: 22)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                                }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

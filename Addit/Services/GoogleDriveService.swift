@@ -20,7 +20,7 @@ final class GoogleDriveService {
     }
 
     func listSharedFolders(pageToken: String? = nil) async throws -> DriveFileListResponse {
-        let query = "mimeType='application/vnd.google-apps.folder' and trashed=false and not 'me' in owners"
+        let query = "sharedWithMe=true and mimeType='application/vnd.google-apps.folder' and trashed=false"
         return try await listFiles(query: query, pageToken: pageToken, pageSize: 100, orderBy: "name",
                                    fields: "files(id,name,mimeType,size,parents,ownedByMe,modifiedTime,capabilities/canEdit,capabilities/canAddChildren),nextPageToken")
     }

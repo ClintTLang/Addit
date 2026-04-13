@@ -1,5 +1,27 @@
 import SwiftUI
 
+enum AppearanceMode: String, CaseIterable {
+    case system
+    case light
+    case dark
+
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 @Observable
 final class ThemeService {
     static let paletteHexes = [
@@ -15,11 +37,18 @@ final class ThemeService {
     ]
 
     private let selectedHexKey = "selectedAccentHex"
+    private let appearanceModeKey = "appearanceMode"
     private let fallbackHex = "4D7298"
 
     var selectedHex: String {
         didSet {
             UserDefaults.standard.set(selectedHex, forKey: selectedHexKey)
+        }
+    }
+
+    var appearanceMode: AppearanceMode {
+        didSet {
+            UserDefaults.standard.set(appearanceMode.rawValue, forKey: appearanceModeKey)
         }
     }
 
@@ -33,6 +62,13 @@ final class ThemeService {
             selectedHex = stored
         } else {
             selectedHex = fallbackHex
+        }
+
+        if let modeRaw = UserDefaults.standard.string(forKey: appearanceModeKey),
+           let mode = AppearanceMode(rawValue: modeRaw) {
+            appearanceMode = mode
+        } else {
+            appearanceMode = .system
         }
     }
 
